@@ -118,6 +118,17 @@ function needsManagerAttention(text) {
   );
 }
 
+function isNotLeadContext(text) {
+  const t = String(text || '').toLowerCase();
+  return (
+    /\u0441\u043b\u0443\u0447\u0430\u0439\u043d\u043e/u.test(t) ||
+    /\u043d\u0435\s+\u0442\u0443\u0434\u0430/u.test(t) ||
+    /\u043e\u0448\u0438\u0431/u.test(t) ||
+    /\u043d\u0435\s+\u043d\u0430\u0434\u043e/u.test(t) ||
+    /\u043e\u0442\u043c\u0435\u043d/u.test(t)
+  );
+}
+
 function getClientName(chat) {
   const ownId = String(process.env.AVITO_USER_ID || '');
   const client = (chat.users || []).find((user) => String(user.id) !== ownId);
@@ -190,6 +201,9 @@ async function processChat(chat) {
 
   const isNewChat = !hasSession(chatId);
   const session = getSession(chatId);
+  if (leads.isLeadSent(chatId)) {
+    session.leadSent = true;
+  }
 
   if (isNewChat) {
     logger.info(`New chat: ${chatId}`);
@@ -281,7 +295,7 @@ async function processChat(chat) {
   }
 
   const { phone, address } = session.collectedData;
-  if (phone && address && !session.leadSent) {
+  if (phone && address && !session.leadSent && !leads.isLeadSent(chatId) && !isNotLeadContext(text)) {
     session.leadSent = true;
     await sendLead(chatId, session.collectedData);
     statsModule.incLead(phone);
