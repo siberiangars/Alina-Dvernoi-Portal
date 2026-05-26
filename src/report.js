@@ -7,52 +7,65 @@ const stats = require('./stats');
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const KRSK_OFFSET_MS = 7 * 60 * 60 * 1000;
+
+const T = {
+  title: '\uD83D\uDCCA <b>\u041e\u0442\u0447\u0435\u0442 \u043f\u043e \u0440\u0430\u0431\u043e\u0442\u0435 \u0410\u043b\u0438\u043d\u044b</b>',
+  line: '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
+  noPhones: '\u043d\u0435\u0442',
+  ok: '\u0414\u0438\u0430\u043b\u043e\u0433\u0438 \u0438\u0434\u0443\u0442 \u0432 \u0448\u0442\u0430\u0442\u043d\u043e\u043c \u0440\u0435\u0436\u0438\u043c\u0435.',
+  idle: '\u0417\u0430 \u044d\u0442\u043e\u0442 \u043f\u0435\u0440\u0438\u043e\u0434 \u0430\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u044c \u043d\u0435 \u0437\u0430\u0444\u0438\u043a\u0441\u0438\u0440\u043e\u0432\u0430\u043d\u0430.',
+  noLeads: '\u0415\u0441\u0442\u044c \u0432\u0445\u043e\u0434\u044f\u0449\u0438\u0435, \u043d\u043e \u0437\u0430\u044f\u0432\u043e\u043a \u043f\u043e\u043a\u0430 \u043d\u0435\u0442. \u041d\u0443\u0436\u043d\u043e \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0447\u0430\u0442\u044b \u0431\u0435\u0437 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430.',
+};
 
 function fmtTime(date) {
-  return date.toLocaleString('ru-RU', { timeZone: 'Asia/Krasnoyarsk',
-    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return date.toLocaleString('ru-RU', {
+    timeZone: 'Asia/Krasnoyarsk',
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function msUntilNextKrskHour(targetHour) {
+  const now = new Date();
+  const krskNow = new Date(now.getTime() + KRSK_OFFSET_MS);
+  const target = new Date(krskNow);
+  target.setUTCHours(targetHour, 0, 0, 0);
+  if (target <= krskNow) target.setUTCDate(target.getUTCDate() + 1);
+  return target.getTime() - krskNow.getTime();
 }
 
 async function sendDailyReport() {
   const s = stats.getAndReset();
-
-  const period = `${fmtTime(s.periodStart)} — ${fmtTime(s.periodEnd)}`;
-
-  const convRate = s.chatsReplied > 0
-    ? Math.round((s.leadsTotal / s.chatsReplied) * 100)
-    : 0;
-  const avgIncomingPerChat = s.chatsReplied > 0 ? (s.messagesReceived / s.chatsReplied).toFixed(1) : '0.0';
-  const avgOutgoingPerChat = s.chatsReplied > 0 ? (s.messagesSent / s.chatsReplied).toFixed(1) : '0.0';
+  const period = `${fmtTime(s.periodStart)} - ${fmtTime(s.periodEnd)}`;
+  const convRate = s.chatsReplied > 0 ? Math.round((s.leadsTotal / s.chatsReplied) * 100) : 0;
   const chatsWithoutLead = Math.max(s.chatsReplied - s.leadsTotal, 0);
   const replyCoverage = s.messagesReceived > 0 ? Math.round((s.messagesSent / s.messagesReceived) * 100) : 0;
-  const phonesText = s.phonesCollected.length > 0 ? s.phonesCollected.join(', ') : 'нет';
+  const phonesText = s.phonesCollected.length > 0 ? s.phonesCollected.join(', ') : T.noPhones;
   const totalActivity = s.messagesReceived + s.messagesSent + s.leadsTotal;
 
-  let statusLine = 'Диалоги идут в штатном режиме.';
-  if (totalActivity === 0) {
-    statusLine = 'За этот период активность не зафиксирована.';
-  } else if (s.messagesReceived > 0 && s.leadsTotal === 0) {
-    statusLine = 'Есть входящие, но заявок пока нет. Нужно проверить чаты без телефона.';
-  }
+  let statusLine = T.ok;
+  if (totalActivity === 0) statusLine = T.idle;
+  else if (s.messagesReceived > 0 && s.leadsTotal === 0) statusLine = T.noLeads;
 
   const text =
-    `📊 <b>Отчет по работе Алины</b>\n` +
-    `━━━━━━━━━━━━━━━━━━\n` +
-    `🕐 <b>Период:</b> ${period}\n` +
-    `💬 <b>Чатов с ответом:</b> ${s.chatsReplied}\n` +
-    `📥 <b>Входящих сообщений:</b> ${s.messagesReceived}\n` +
-    `📤 <b>Исходящих сообщений:</b> ${s.messagesSent}\n` +
-    `━━━━━━━━━━━━━━━━━━\n` +
-    `📝 <b>Заявок отправлено:</b> ${s.leadsTotal}\n` +
-    `📞 <b>Собрано телефонов:</b> ${s.phonesCollected.length}\n` +
-    `📋 <b>Телефоны:</b> ${phonesText}\n` +
-    `━━━━━━━━━━━━━━━━━━\n` +
-    `📈 <b>Конверсия в заявки:</b> ${convRate}%\n` +
-    `📎 <b>Чатов без заявки:</b> ${chatsWithoutLead}\n` +
-    `⚙️ <b>Среднее входящих на чат:</b> ${avgIncomingPerChat}\n` +
-    `⚙️ <b>Среднее исходящих на чат:</b> ${avgOutgoingPerChat}\n` +
-    `🧭 <b>Покрытие ответами:</b> ${replyCoverage}%\n` +
-    `━━━━━━━━━━━━━━━━━━\n` +
+    `${T.title}\n` +
+    `${T.line}\n` +
+    `\uD83D\uDD50 <b>\u041f\u0435\u0440\u0438\u043e\u0434:</b> ${period}\n` +
+    `\uD83D\uDCAC <b>\u0427\u0430\u0442\u043e\u0432 \u0441 \u043e\u0442\u0432\u0435\u0442\u043e\u043c:</b> ${s.chatsReplied}\n` +
+    `\uD83D\uDCE5 <b>\u0412\u0445\u043e\u0434\u044f\u0449\u0438\u0445 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0439:</b> ${s.messagesReceived}\n` +
+    `\uD83D\uDCE4 <b>\u0418\u0441\u0445\u043e\u0434\u044f\u0449\u0438\u0445 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0439:</b> ${s.messagesSent}\n` +
+    `${T.line}\n` +
+    `\uD83D\uDCDD <b>\u0417\u0430\u044f\u0432\u043e\u043a \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e:</b> ${s.leadsTotal}\n` +
+    `\uD83D\uDCDE <b>\u0421\u043e\u0431\u0440\u0430\u043d\u043e \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u043e\u0432:</b> ${s.phonesCollected.length}\n` +
+    `\uD83D\uDCCB <b>\u0422\u0435\u043b\u0435\u0444\u043e\u043d\u044b:</b> ${phonesText}\n` +
+    `${T.line}\n` +
+    `\uD83D\uDCC8 <b>\u041a\u043e\u043d\u0432\u0435\u0440\u0441\u0438\u044f \u0432 \u0437\u0430\u044f\u0432\u043a\u0438:</b> ${convRate}%\n` +
+    `\uD83D\uDCCE <b>\u0427\u0430\u0442\u043e\u0432 \u0431\u0435\u0437 \u0437\u0430\u044f\u0432\u043a\u0438:</b> ${chatsWithoutLead}\n` +
+    `\uD83E\uDDED <b>\u041f\u043e\u043a\u0440\u044b\u0442\u0438\u0435 \u043e\u0442\u0432\u0435\u0442\u0430\u043c\u0438:</b> ${replyCoverage}%\n` +
+    `${T.line}\n` +
     `${statusLine}`;
 
   try {
@@ -63,39 +76,25 @@ async function sendDailyReport() {
     });
     logger.info('Daily report sent to Telegram');
   } catch (err) {
-    logger.error(`Report send failed: ${err.message}`);
+    const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+    logger.error(`Report send failed: ${detail}`);
   }
 }
 
-// Планировщик: запускать в 10:00 и 22:00 по Красноярску (UTC+7)
 function scheduleReports() {
-  const KRASNOYARSK_OFFSET = 7 * 60; // минут
-
-  function msUntilNext(targetHour) {
-    const now = new Date();
-    const nowKrsk = new Date(now.getTime() + KRASNOYARSK_OFFSET * 60 * 1000);
-
-    const next = new Date(nowKrsk);
-    next.setUTCHours(targetHour - 7, 0, 0, 0); // переводим обратно в UTC
-    if (next <= nowKrsk) next.setUTCDate(next.getUTCDate() + 1);
-
-    return next.getTime() - now.getTime();
-  }
-
   function scheduleOne(hour, label) {
-    const delay = msUntilNext(hour);
+    const delay = msUntilNextKrskHour(hour);
     const inMinutes = Math.round(delay / 60000);
     logger.info(`Report "${label}" scheduled in ${inMinutes} min`);
 
     setTimeout(async () => {
       await sendDailyReport();
-      // Перепланировать на следующий день
       scheduleOne(hour, label);
     }, delay);
   }
 
-  scheduleOne(10, 'утренний 10:00');
-  scheduleOne(22, 'вечерний 22:00');
+  scheduleOne(10, '\u0443\u0442\u0440\u0435\u043d\u043d\u0438\u0439 10:00');
+  scheduleOne(22, '\u0432\u0435\u0447\u0435\u0440\u043d\u0438\u0439 22:00');
 }
 
-module.exports = { sendDailyReport, scheduleReports };
+module.exports = { sendDailyReport, scheduleReports, msUntilNextKrskHour };
