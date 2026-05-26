@@ -1,0 +1,22 @@
+services:
+  alina-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: alina-bot-local
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      TZ: Asia/Krasnoyarsk
+      HTTP_PROXY: ${ALINA_HTTP_PROXY:-}
+      HTTPS_PROXY: ${ALINA_HTTPS_PROXY:-}
+      ALL_PROXY: ${ALINA_ALL_PROXY:-}
+      NO_PROXY: ${ALINA_NO_PROXY:-localhost,127.0.0.1}
+      MANUAL_LOCK_BYPASS_CHAT_IDS: ${MANUAL_LOCK_BYPASS_CHAT_IDS:-u2i-nX_MNQKx6XjXiqeH6hNFAA}
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

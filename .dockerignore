@@ -1,0 +1,14 @@
+.git
+.claude
+.next
+node_modules
+logs
+*.log
+Dockerfile
+docker-compose.yml
+npm-debug.log*
+OneDrive
+public
+prisma
+dev.db
+*.py
