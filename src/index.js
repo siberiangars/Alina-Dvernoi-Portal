@@ -82,12 +82,30 @@ function isSystemMessage(msg) {
   return false;
 }
 
-function shouldAskMessenger(collectedData) {
+function currentMessageLooksLikePhone(text) {
+  const digits = String(text || '').replace(/\D/g, '');
+  return digits.length === 10 || digits.length === 11;
+}
+
+function currentMessageLooksLikeLeadClose(text) {
+  const t = String(text || '').toLowerCase();
+  return (
+    /\u0437\u0430\u044f\u0432\u043a/u.test(t) ||
+    /\u0437\u0430\u043f\u0438\u0448/u.test(t) ||
+    /\u043f\u0435\u0440\u0435\u0434\u0430/u.test(t) ||
+    /\u0441\u0432\u044f\u0436/u.test(t) ||
+    /\u0442\u0435\u043b\u0435\u0444\u043e\u043d/u.test(t) ||
+    /\u043d\u043e\u043c\u0435\u0440/u.test(t)
+  );
+}
+
+function shouldAskMessenger(collectedData, lastUserText) {
   return Boolean(
     collectedData.phone &&
     collectedData.address &&
     !collectedData.messenger &&
-    !collectedData.messengerAsked
+    !collectedData.messengerAsked &&
+    (currentMessageLooksLikePhone(lastUserText) || currentMessageLooksLikeLeadClose(lastUserText))
   );
 }
 
@@ -234,7 +252,7 @@ async function processChat(chat) {
   });
 
   let reply;
-  if (shouldAskMessenger(session.collectedData)) {
+  if (shouldAskMessenger(session.collectedData, text)) {
     reply = 'Спасибо! Заявку передам мастеру. Подскажите, куда удобнее написать: Telegram или Max?';
     session.collectedData.messengerAsked = true;
   } else {
