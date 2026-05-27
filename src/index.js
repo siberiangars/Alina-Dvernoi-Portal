@@ -162,6 +162,25 @@ function isNotLeadContext(text) {
   );
 }
 
+function isCatalogRequest(text) {
+  const t = String(text || '').toLowerCase();
+  return (
+    /\u043a\u0430\u0442\u0430\u043b\u043e\u0433/u.test(t) ||
+    /\u0441\u0430\u0439\u0442/u.test(t) ||
+    /\u0441\u0441\u044b\u043b\u043a/u.test(t) ||
+    /\u0432\u0430\u0440\u0438\u0430\u043d\u0442/u.test(t) ||
+    /\u043c\u043e\u0434\u0435\u043b/u.test(t) ||
+    /\u0430\u0441\u0441\u043e\u0440\u0442\u0438\u043c\u0435\u043d\u0442/u.test(t)
+  );
+}
+
+function catalogReply(needsGreeting = false) {
+  const intro = needsGreeting
+    ? '\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u041c\u0435\u043d\u044f \u0437\u043e\u0432\u0443\u0442 \u0410\u043b\u0438\u043d\u0430, \u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440 \u043c\u0430\u0433\u0430\u0437\u0438\u043d\u0430 \u0414\u0432\u0435\u0440\u043d\u043e\u0439 \u041f\u043e\u0440\u0442\u0430\u043b. '
+    : '';
+  return `${intro}\u041a\u0430\u0442\u0430\u043b\u043e\u0433 \u0438 \u0430\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u044b\u0435 \u0432\u0430\u0440\u0438\u0430\u043d\u0442\u044b \u043c\u043e\u0436\u043d\u043e \u043f\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u0442\u044c \u043d\u0430 \u0441\u0430\u0439\u0442\u0435: https://\u0434\u0432\u0435\u0440\u043d\u043e\u0439\u043f\u043e\u0440\u0442\u0430\u043b.\u0440\u0444. \u0415\u0441\u043b\u0438 \u043f\u043e\u0434\u0441\u043a\u0430\u0436\u0435\u0442\u0435, \u043a\u0430\u043a\u0430\u044f \u0434\u0432\u0435\u0440\u044c \u043d\u0443\u0436\u043d\u0430, \u0441\u0440\u0430\u0437\u0443 \u0441\u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440\u0443\u044e \u0437\u0434\u0435\u0441\u044c.`;
+}
+
 function getClientName(chat) {
   const ownId = String(process.env.AVITO_USER_ID || '');
   const client = (chat.users || []).find((user) => String(user.id) !== ownId);
@@ -351,7 +370,10 @@ async function processChat(chat) {
   });
 
   let reply;
-  if (shouldAskMessenger(session.collectedData, text)) {
+  const currentMessageIsCatalogRequest = isCatalogRequest(text);
+  if (currentMessageIsCatalogRequest) {
+    reply = catalogReply(needsGreeting);
+  } else if (shouldAskMessenger(session.collectedData, text)) {
     reply = 'Спасибо! Заявку передам мастеру. Подскажите, куда удобнее написать: Telegram или Max?';
     session.collectedData.messengerAsked = true;
   } else {
@@ -364,7 +386,9 @@ async function processChat(chat) {
     }
   }
 
-  reply = sanitizeReply(reply, { lastUserText: text, needsGreeting });
+  if (!currentMessageIsCatalogRequest) {
+    reply = sanitizeReply(reply, { lastUserText: text, needsGreeting });
+  }
   addMessage(chatId, 'assistant', reply);
 
   await randomDelay(reply);
