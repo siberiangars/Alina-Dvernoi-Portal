@@ -51,6 +51,34 @@ function trimSentences(text, maxSentences = 3) {
   return parts.slice(0, maxSentences).join(' ').trim();
 }
 
+function looksLikePriceQuote(text) {
+  const t = String(text || '').toLowerCase();
+  return (
+    /(?:\d[\d\s]{1,8})(?:₽|р\.?|руб(?:\.|лей|ля|ль)?)/iu.test(t) ||
+    /(?:от|до|примерно|около|в районе)\s+\d[\d\s]{1,8}/iu.test(t)
+  );
+}
+
+function userAskedPrice(userText) {
+  const t = String(userText || '').toLowerCase();
+  return (
+    /\u0441\u043a\u043e\u043b\u044c\u043a/u.test(t) ||
+    /\u0446\u0435\u043d/u.test(t) ||
+    /\u0441\u0442\u043e\u0438/u.test(t) ||
+    /\u0440\u0430\u0441\u0441\u0447/u.test(t) ||
+    /\u043f\u0440\u0430\u0439\u0441/u.test(t) ||
+    /\u0434\u043e\u0440\u043e\u0433/u.test(t)
+  );
+}
+
+function safePriceReply(lastUserText) {
+  const base = '\u0422\u043e\u0447\u043d\u0443\u044e \u0441\u0442\u043e\u0438\u043c\u043e\u0441\u0442\u044c \u0440\u0430\u0441\u0441\u0447\u0438\u0442\u044b\u0432\u0430\u0435\u0442 \u043c\u0430\u0441\u0442\u0435\u0440: \u0432\u0441\u0435 \u0437\u0430\u0432\u0438\u0441\u0438\u0442 \u043e\u0442 \u0434\u0432\u0435\u0440\u0438, \u043f\u0440\u043e\u0435\u043c\u0430 \u0438 \u0434\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0445 \u0440\u0430\u0431\u043e\u0442.';
+  if (userAskedPrice(lastUserText)) {
+    return `${base} \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435 \u0430\u0434\u0440\u0435\u0441 \u0438 \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430, \u043f\u0435\u0440\u0435\u0434\u0430\u043c \u0437\u0430\u043f\u0440\u043e\u0441 \u043d\u0430 \u0440\u0430\u0441\u0447\u0435\u0442.`;
+  }
+  return `${base} \u042f \u043f\u0435\u0440\u0435\u0434\u0430\u043c \u0437\u0430\u043f\u0440\u043e\u0441 \u043c\u0430\u0441\u0442\u0435\u0440\u0443 \u0434\u043b\u044f \u0440\u0430\u0441\u0447\u0435\u0442\u0430.`;
+}
+
 function sanitizeReply(reply, { lastUserText = '' } = {}) {
   let out = (reply || '').trim();
   if (!out) return 'Подскажите, пожалуйста, подробнее по вашему вопросу.';
@@ -60,6 +88,10 @@ function sanitizeReply(reply, { lastUserText = '' } = {}) {
   out = out.replace(/\s+/g, ' ').trim();
   out = out.replace(/whatsapp|viber|вайбер/gi, 'Telegram или Max');
   out = out.replace(/as an ai|language model|i am a bot/gi, '');
+
+  if (looksLikePriceQuote(out)) {
+    return safePriceReply(lastUserText);
+  }
 
   if (/\?{4,}/.test(out) || (out.match(/\?/g) || []).length >= 10) {
     return 'Поняла вас. Подскажите, пожалуйста, подробнее по вашему вопросу.';
