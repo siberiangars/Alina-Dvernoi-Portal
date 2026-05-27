@@ -14,6 +14,25 @@ let tokenCache = { accessToken: null, expiresAt: 0 };
 // Множество ID уже обработанных/виденных сообщений
 const processedMessageIds = new Set();
 
+function normalizeIncomingText(text) {
+  return String(text || '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function isProactiveAvitoTriggerText(text) {
+  const t = normalizeIncomingText(text);
+  const user = /\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c/u.test(t);
+  const phoneViewed = /\u043f\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u043b\s+\u043d\u043e\u043c\u0435\u0440/u.test(t);
+  const emptyChat = (
+    /\u0441\u043e\u0437\u0434\u0430\u043b\s+\u0447\u0430\u0442/u.test(t) &&
+    /\u043f\u043e\u043a\u0430\s+\u043d\u0438\u0447\u0435\u0433\u043e\s+\u043d\u0435\s+\u043d\u0430\u043f\u0438\u0441\u0430\u043b/u.test(t)
+  );
+  return user && (phoneViewed || emptyChat);
+}
+
 async function getAccessToken() {
   if (tokenCache.accessToken && Date.now() < tokenCache.expiresAt - 60_000) {
     return tokenCache.accessToken;
@@ -90,6 +109,10 @@ async function getChatsNeedingReply() {
     // Только текст
     if (last.type && last.type !== 'text') return false;
     const text = last.content?.text || '';
+    if (isProactiveAvitoTriggerText(text)) {
+      if (processedMessageIds.has(last.id)) return false;
+      return true;
+    }
     if (text.startsWith('[Системное сообщение]')) return false;
     if (!text.trim()) return false;
     // Только НОВЫЕ — не виденные при старте и не уже обработанные

@@ -87,6 +87,39 @@ function currentMessageLooksLikePhone(text) {
   return digits.length === 10 || digits.length === 11;
 }
 
+function normalizeIncomingText(text) {
+  return String(text || '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function isPhoneViewedTrigger(text) {
+  const t = normalizeIncomingText(text);
+  return (
+    /\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c/u.test(t) &&
+    /\u043f\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u043b\s+\u043d\u043e\u043c\u0435\u0440/u.test(t)
+  );
+}
+
+function isEmptyChatTrigger(text) {
+  const t = normalizeIncomingText(text);
+  return (
+    /\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c/u.test(t) &&
+    /\u0441\u043e\u0437\u0434\u0430\u043b\s+\u0447\u0430\u0442/u.test(t) &&
+    /\u043f\u043e\u043a\u0430\s+\u043d\u0438\u0447\u0435\u0433\u043e\s+\u043d\u0435\s+\u043d\u0430\u043f\u0438\u0441\u0430\u043b/u.test(t)
+  );
+}
+
+function isProactiveAvitoTrigger(text) {
+  return isPhoneViewedTrigger(text) || isEmptyChatTrigger(text);
+}
+
+function proactiveGreeting() {
+  return '\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u041c\u0435\u043d\u044f \u0437\u043e\u0432\u0443\u0442 \u0410\u043b\u0438\u043d\u0430, \u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440 \u043c\u0430\u0433\u0430\u0437\u0438\u043d\u0430 \u0414\u0432\u0435\u0440\u043d\u043e\u0439 \u041f\u043e\u0440\u0442\u0430\u043b. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0443 \u043f\u043e \u0434\u0432\u0435\u0440\u044f\u043c, \u043c\u043e\u043d\u0442\u0430\u0436\u0443 \u0438\u043b\u0438 \u0437\u0430\u043c\u0435\u0440\u0443. \u0412\u0430\u043c \u043d\u0443\u0436\u043d\u0430 \u0432\u0445\u043e\u0434\u043d\u0430\u044f \u0438\u043b\u0438 \u043c\u0435\u0436\u043a\u043e\u043c\u043d\u0430\u0442\u043d\u0430\u044f \u0434\u0432\u0435\u0440\u044c?';
+}
+
 function currentMessageLooksLikeLeadClose(text) {
   const t = String(text || '').toLowerCase();
   return (
@@ -174,6 +207,33 @@ async function processChat(chat) {
   messages.sort((a, b) => a.created - b.created);
 
   const realMessages = messages.filter((m) => !isSystemMessage(m));
+  const lastRawMsg = messages[messages.length - 1];
+  const lastRawText = lastRawMsg?.content?.text || '';
+  if (lastRawMsg && !avito.isOwnMessage(lastRawMsg) && isProactiveAvitoTrigger(lastRawText)) {
+    if (!bypassManualLock && manualLocks.isLocked(chatId)) {
+      logger.debug(`[LOCKED] ${chatId} - proactive Avito trigger ignored because operator took over`);
+      avito.markProcessed(lastRawMsg.id);
+      return;
+    }
+    if (avito.isProcessed(lastRawMsg.id)) return;
+
+    const reply = proactiveGreeting();
+    avito.markProcessed(lastRawMsg.id);
+    logger.info(`AVITO SYSTEM TRIGGER [${chatId}] ${lastRawText.slice(0, 80)}`);
+    statsModule.incReceived(chatId);
+
+    try {
+      await randomDelay(reply);
+      await avito.sendMessage(chatId, reply);
+      logger.info(`OUT [${chatId}] ${reply.slice(0, 80)}`);
+      statsModule.incSent();
+      await avito.markChatRead(chatId);
+    } catch (err) {
+      logger.error(`proactive greeting failed for ${chatId}: ${err.stack}`);
+      statsModule.incError();
+    }
+    return;
+  }
   if (realMessages.length === 0) return;
 
   const lastMsg = realMessages[realMessages.length - 1];
