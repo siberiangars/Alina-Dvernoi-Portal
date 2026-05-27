@@ -339,7 +339,7 @@ async function processChat(chat) {
     }
   }
 
-  reply = sanitizeReply(reply, { lastUserText: text });
+  reply = sanitizeReply(reply, { lastUserText: text, needsGreeting });
   addMessage(chatId, 'assistant', reply);
 
   await randomDelay(reply);
