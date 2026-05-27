@@ -168,6 +168,21 @@ function getClientName(chat) {
   return client?.name || null;
 }
 
+function normalizeForCompare(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim();
+}
+
+function isKnownBotAssistantMessage(chatId, message) {
+  if (!hasSession(chatId)) return false;
+  const text = normalizeForCompare(message.content?.text || '');
+  if (!text) return false;
+  const session = getSession(chatId);
+  return session.messages.some((m) => (
+    m.role === 'assistant' &&
+    normalizeForCompare(m.content) === text
+  ));
+}
+
 function isHistoryReadBlocked(err) {
   return err?.response?.status === 402;
 }
@@ -247,7 +262,17 @@ async function processChat(chat) {
   // Детектируем ручное сообщение оператора:
   // ищем новое исходящее сообщение от оператора после запуска бота
   const ourMsgs = realMessages.filter(m => avito.isOwnMessage(m));
-  const manualMsg = ourMsgs.find(m => Number(m.created || 0) >= BOT_STARTED_AT && !avito.isProcessed(m.id));
+  const botEchoMsgs = ourMsgs.filter((m) => (
+    Number(m.created || 0) >= BOT_STARTED_AT &&
+    !avito.isProcessed(m.id) &&
+    isKnownBotAssistantMessage(chatId, m)
+  ));
+  botEchoMsgs.forEach((m) => avito.markProcessed(m.id));
+  const manualMsg = ourMsgs.find(m => (
+    Number(m.created || 0) >= BOT_STARTED_AT &&
+    !avito.isProcessed(m.id) &&
+    !isKnownBotAssistantMessage(chatId, m)
+  ));
   if (!bypassManualLock && manualMsg) {
     manualLocks.lock(chatId);
     // Помечаем все наши сообщения как обработанные
