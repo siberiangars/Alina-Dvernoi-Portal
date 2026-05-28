@@ -118,8 +118,16 @@ function isEmptyChatTrigger(text) {
   );
 }
 
+function isUnsupportedAvitoSystemTrigger(text) {
+  const t = normalizeIncomingText(text);
+  return (
+    /\u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435\s+\u043d\u0435\s+\u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f/u.test(t) &&
+    /avito\.ru\/profile\/messenger\/channel/u.test(t)
+  );
+}
+
 function isProactiveAvitoTrigger(text) {
-  return isPhoneViewedTrigger(text) || isEmptyChatTrigger(text);
+  return isPhoneViewedTrigger(text) || isEmptyChatTrigger(text) || isUnsupportedAvitoSystemTrigger(text);
 }
 
 function proactiveGreeting() {

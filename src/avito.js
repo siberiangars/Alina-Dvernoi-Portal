@@ -31,7 +31,11 @@ function isProactiveAvitoTriggerText(text) {
     /\u0441\u043e\u0437\u0434\u0430\u043b\s+\u0447\u0430\u0442/u.test(t) &&
     /\u043f\u043e\u043a\u0430\s+\u043d\u0438\u0447\u0435\u0433\u043e\s+\u043d\u0435\s+\u043d\u0430\u043f\u0438\u0441\u0430\u043b/u.test(t)
   );
-  return user && (phoneViewed || emptyChat);
+  const unsupportedSystem = (
+    /\u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435\s+\u043d\u0435\s+\u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f/u.test(t) &&
+    /avito\.ru\/profile\/messenger\/channel/u.test(t)
+  );
+  return (user && (phoneViewed || emptyChat)) || unsupportedSystem;
 }
 
 async function getAccessToken() {
@@ -120,13 +124,13 @@ async function getChatsNeedingReply() {
     if (!last) return false;
     // Только от клиента (не от нас)
     if (String(last.author_id) === String(USER_ID)) return false;
-    // Только текст
-    if (last.type && last.type !== 'text') return false;
     const text = last.content?.text || '';
     if (isProactiveAvitoTriggerText(text)) {
       if (processedMessageIds.has(last.id)) return false;
       return true;
     }
+    // Только текст
+    if (last.type && last.type !== 'text') return false;
     if (text.startsWith('[Системное сообщение]')) return false;
     if (!text.trim()) return false;
     // Только НОВЫЕ — не виденные при старте и не уже обработанные
