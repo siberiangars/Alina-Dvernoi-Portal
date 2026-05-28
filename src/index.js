@@ -15,6 +15,7 @@ const leads = require('./leads');
 const { getSimilarExamples } = require('./rag');
 const { sanitizeReply } = require('./guardrails');
 const manualLocks = require('./manualLocks');
+const botMessages = require('./botMessages');
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || '15000', 10);
 const ENABLE_WARMING = process.env.ENABLE_WARMING === 'true';
@@ -39,6 +40,11 @@ function randomDelay(text = '') {
   const typingMs = Math.min((text || '').length * 45, 4000);
   const jitter = Math.floor(Math.random() * (baseMax - baseMin + 1)) + baseMin;
   return new Promise((r) => setTimeout(r, jitter + typingMs));
+}
+
+async function sendBotMessage(chatId, text) {
+  await avito.sendMessage(chatId, text);
+  botMessages.remember(chatId, text);
 }
 
 function formatMessageForModel(text, unixSec) {
@@ -192,13 +198,23 @@ function normalizeForCompare(text) {
 }
 
 function isKnownBotAssistantMessage(chatId, message) {
-  if (!hasSession(chatId)) return false;
   const text = normalizeForCompare(message.content?.text || '');
   if (!text) return false;
+  if (botMessages.isKnown(chatId, text)) return true;
+  if (!hasSession(chatId)) return false;
   const session = getSession(chatId);
   return session.messages.some((m) => (
     m.role === 'assistant' &&
     normalizeForCompare(m.content) === text
+  ));
+}
+
+function findManualOperatorMessage(chatId, ourMsgs) {
+  const trackingStartedAtSec = Math.floor(botMessages.trackingStartedAtMs() / 1000);
+  return ourMsgs.find((m) => (
+    Number(m.created || 0) >= trackingStartedAtSec &&
+    !avito.isProcessed(m.id) &&
+    !isKnownBotAssistantMessage(chatId, m)
   ));
 }
 
@@ -222,7 +238,7 @@ async function processChat(chat) {
       }
       try {
         const fallbackReply = 'Здравствуйте! Получили ваше сообщение. Повторите, пожалуйста, коротко ваш вопрос — и я сразу помогу.';
-        await avito.sendMessage(chatId, fallbackReply);
+        await sendBotMessage(chatId, fallbackReply);
         logger.info(`OUT [${chatId}] ${fallbackReply.slice(0, 80)}`);
         statsModule.incSent();
         await avito.markChatRead(chatId);
@@ -258,7 +274,7 @@ async function processChat(chat) {
 
     try {
       await randomDelay(reply);
-      await avito.sendMessage(chatId, reply);
+      await sendBotMessage(chatId, reply);
       logger.info(`OUT [${chatId}] ${reply.slice(0, 80)}`);
       statsModule.incSent();
       await avito.markChatRead(chatId);
@@ -287,11 +303,7 @@ async function processChat(chat) {
     isKnownBotAssistantMessage(chatId, m)
   ));
   botEchoMsgs.forEach((m) => avito.markProcessed(m.id));
-  const manualMsg = ourMsgs.find(m => (
-    Number(m.created || 0) >= BOT_STARTED_AT &&
-    !avito.isProcessed(m.id) &&
-    !isKnownBotAssistantMessage(chatId, m)
-  ));
+  const manualMsg = findManualOperatorMessage(chatId, ourMsgs);
   if (!bypassManualLock && manualMsg) {
     manualLocks.lock(chatId);
     // Помечаем все наши сообщения как обработанные
@@ -394,7 +406,7 @@ async function processChat(chat) {
   await randomDelay(reply);
 
   try {
-    await avito.sendMessage(chatId, reply);
+    await sendBotMessage(chatId, reply);
     logger.info(`OUT [${chatId}] ${reply.slice(0, 80)}`);
     statsModule.incSent();
   } catch (err) {
@@ -454,7 +466,7 @@ async function start() {
       authHeaders: avito.authHeaders,
       getAllChats: avito.getAllChats,
       getChatMessages: avito.getChatMessages,
-      sendMessage: avito.sendMessage,
+      sendMessage: sendBotMessage,
       getSession,
       addMessage,
       markProcessed: avito.markProcessed,
@@ -469,7 +481,7 @@ async function start() {
     scheduleFollowups({
       getAllChats: avito.getAllChats,
       getChatMessages: avito.getChatMessages,
-      sendMessage: avito.sendMessage,
+      sendMessage: sendBotMessage,
       getSession,
       addMessage,
     });

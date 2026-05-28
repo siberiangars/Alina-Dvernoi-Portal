@@ -1,33 +1,59 @@
 'use strict';
 
-/**
- * Хранит chat_id где оператор написал вручную.
- * Бот не отвечает в заблокированных чатах.
- * Блокировка снимается если клиент пишет снова через 24 часа
- * (чтобы не забывать про новые обращения).
- */
+const fs = require('fs');
+const path = require('path');
 
-const LOCK_TTL_MS = 24 * 60 * 60 * 1000; // 24 часа
+const LOCK_TTL_MS = 24 * 60 * 60 * 1000;
+const DATA_DIR = path.join(process.cwd(), 'data');
+const FILE = path.join(DATA_DIR, 'manual_locks.json');
 
-const locks = new Map(); // chatId -> timestamp блокировки
+function ensureDataDir() {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+}
 
-function lock(chatId) {
-  locks.set(chatId, Date.now());
+function readData() {
+  try {
+    if (!fs.existsSync(FILE)) return {};
+    const parsed = JSON.parse(fs.readFileSync(FILE, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeData(data) {
+  ensureDataDir();
+  fs.writeFileSync(FILE, JSON.stringify(data, null, 2), 'utf8');
+}
+
+function cleanup(data) {
+  const now = Date.now();
+  for (const [chatId, value] of Object.entries(data)) {
+    const ts = typeof value === 'number' ? value : Number(value?.lockedAt || 0);
+    if (!ts || now - ts > LOCK_TTL_MS) delete data[chatId];
+  }
+}
+
+function lock(chatId, reason = 'operator') {
+  if (!chatId) return;
+  const data = readData();
+  cleanup(data);
+  data[chatId] = { lockedAt: Date.now(), reason };
+  writeData(data);
 }
 
 function isLocked(chatId) {
-  const ts = locks.get(chatId);
-  if (!ts) return false;
-  // Блокировка истекла — снимаем
-  if (Date.now() - ts > LOCK_TTL_MS) {
-    locks.delete(chatId);
-    return false;
-  }
-  return true;
+  const data = readData();
+  cleanup(data);
+  const locked = Boolean(data[chatId]);
+  writeData(data);
+  return locked;
 }
 
 function unlock(chatId) {
-  locks.delete(chatId);
+  const data = readData();
+  delete data[chatId];
+  writeData(data);
 }
 
 module.exports = { lock, isLocked, unlock };
