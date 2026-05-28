@@ -10,6 +10,7 @@ const CLIENT_SECRET = process.env.AVITO_CLIENT_SECRET;
 const USER_ID = process.env.AVITO_USER_ID;
 
 let tokenCache = { accessToken: null, expiresAt: 0 };
+const PROACTIVE_STARTUP_WINDOW_HOURS = Number(process.env.PROACTIVE_STARTUP_WINDOW_HOURS || 24);
 
 // Множество ID уже обработанных/виденных сообщений
 const processedMessageIds = new Set();
@@ -88,13 +89,26 @@ async function getAllChats(maxAgeDays = 30) {
 async function initProcessed() {
   logger.info('Initializing: scanning existing chats...');
   const chats = await getAllChats(30);
+  let skippedProactive = 0;
 
   for (const chat of chats) {
-    const lastId = chat.last_message?.id;
+    const last = chat.last_message;
+    const lastId = last?.id;
+    const text = last?.content?.text || '';
+    const ageHours = last?.created ? (Date.now() / 1000 - Number(last.created)) / 3600 : Infinity;
+    if (
+      lastId &&
+      String(last.author_id) !== String(USER_ID) &&
+      isProactiveAvitoTriggerText(text) &&
+      ageHours <= PROACTIVE_STARTUP_WINDOW_HOURS
+    ) {
+      skippedProactive++;
+      continue;
+    }
     if (lastId) processedMessageIds.add(lastId);
   }
 
-  logger.info(`Initialized: ${processedMessageIds.size} existing messages marked as seen. Bot will only respond to NEW messages.`);
+  logger.info(`Initialized: ${processedMessageIds.size} existing messages marked as seen. Proactive system prompts left for reply: ${skippedProactive}. Bot will only respond to NEW messages plus fresh proactive system prompts.`);
 }
 
 // Возвращает чаты где последнее сообщение — НОВОЕ (не помеченное) от клиента
