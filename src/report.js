@@ -2,12 +2,16 @@
 
 require('dotenv').config({ override: true });
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 const logger = require('./logger');
 const stats = require('./stats');
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const KRSK_OFFSET_MS = 7 * 60 * 60 * 1000;
+const REPORT_STATE_FILE = path.join(process.cwd(), 'data', 'report_state.json');
+const DUPLICATE_REPORT_WINDOW_MS = 5 * 60 * 1000;
 
 const T = {
   title: '\uD83D\uDCCA <b>\u041e\u0442\u0447\u0435\u0442 \u043f\u043e \u0440\u0430\u0431\u043e\u0442\u0435 \u0410\u043b\u0438\u043d\u044b</b>',
@@ -37,7 +41,49 @@ function msUntilNextKrskHour(targetHour) {
   return target.getTime() - krskNow.getTime();
 }
 
-async function sendDailyReport() {
+function krskSlotKey(hour) {
+  const parts = new Intl.DateTimeFormat('ru-RU', {
+    timeZone: 'Asia/Krasnoyarsk',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const get = (type) => parts.find((part) => part.type === type)?.value || '';
+  return `${get('year')}-${get('month')}-${get('day')}-${String(hour).padStart(2, '0')}`;
+}
+
+function readReportState() {
+  try {
+    if (!fs.existsSync(REPORT_STATE_FILE)) return {};
+    const parsed = JSON.parse(fs.readFileSync(REPORT_STATE_FILE, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeReportState(state) {
+  fs.mkdirSync(path.dirname(REPORT_STATE_FILE), { recursive: true });
+  fs.writeFileSync(REPORT_STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
+}
+
+function reserveReportSlot(hour) {
+  if (hour === undefined || hour === null) return true;
+  const key = krskSlotKey(hour);
+  const state = readReportState();
+  const last = state[key];
+  if (last && Date.now() - Number(last) < DUPLICATE_REPORT_WINDOW_MS) {
+    logger.warn(`Duplicate report skipped for slot ${key}`);
+    return false;
+  }
+  state[key] = Date.now();
+  writeReportState(state);
+  return true;
+}
+
+async function sendDailyReport(hour = null) {
+  if (!reserveReportSlot(hour)) return;
+
   const s = stats.getAndReset();
   const period = `${fmtTime(s.periodStart)} - ${fmtTime(s.periodEnd)}`;
   const convRate = s.chatsReplied > 0 ? Math.round((s.leadsTotal / s.chatsReplied) * 100) : 0;
@@ -88,7 +134,7 @@ function scheduleReports() {
     logger.info(`Report "${label}" scheduled in ${inMinutes} min`);
 
     setTimeout(async () => {
-      await sendDailyReport();
+      await sendDailyReport(hour);
       scheduleOne(hour, label);
     }, delay);
   }
