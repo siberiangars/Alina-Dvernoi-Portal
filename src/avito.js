@@ -26,16 +26,11 @@ function normalizeIncomingText(text) {
 function isProactiveAvitoTriggerText(text) {
   const t = normalizeIncomingText(text);
   const user = /\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c/u.test(t);
-  const phoneViewed = /\u043f\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u043b\s+\u043d\u043e\u043c\u0435\u0440/u.test(t);
   const emptyChat = (
     /\u0441\u043e\u0437\u0434\u0430\u043b\s+\u0447\u0430\u0442/u.test(t) &&
     /\u043f\u043e\u043a\u0430\s+\u043d\u0438\u0447\u0435\u0433\u043e\s+\u043d\u0435\s+\u043d\u0430\u043f\u0438\u0441\u0430\u043b/u.test(t)
   );
-  const unsupportedSystem = (
-    /\u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435\s+\u043d\u0435\s+\u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f/u.test(t) &&
-    /avito\.ru\/profile\/messenger\/channel/u.test(t)
-  );
-  return (user && (phoneViewed || emptyChat)) || unsupportedSystem;
+  return user && emptyChat;
 }
 
 async function getAccessToken() {
