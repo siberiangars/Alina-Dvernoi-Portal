@@ -309,6 +309,10 @@ async function processChat(chat) {
 
   const isNewChat = !hasSession(chatId);
   const session = getSession(chatId);
+  const profileName = getClientName(chat);
+  if (!session.collectedData.name && profileName) {
+    mergeData(chatId, { name: profileName, nameSource: 'profile' });
+  }
   if (leads.isLeadSent(chatId)) {
     session.leadSent = true;
   }

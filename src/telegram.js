@@ -53,6 +53,7 @@ async function sendTelegramMessage(text) {
 
 async function sendLead(chatId, collectedData) {
   const {
+    name,
     phone,
     messenger,
     address,
@@ -71,6 +72,7 @@ async function sendLead(chatId, collectedData) {
   const text =
     `\uD83D\uDEA6 <b>\u041d\u043e\u0432\u0430\u044f \u0437\u0430\u044f\u0432\u043a\u0430 \u0441 \u0410\u0432\u0438\u0442\u043e</b>\n` +
     `\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n` +
+    `\uD83D\uDC64 <b>\u041a\u043b\u0438\u0435\u043d\u0442:</b> ${cleanText(name)}\n` +
     `\uD83D\uDCDE <b>\u0422\u0435\u043b\u0435\u0444\u043e\u043d:</b> ${cleanText(phone)}\n` +
     `\uD83D\uDCAC <b>\u041c\u0435\u0441\u0441\u0435\u043d\u0434\u0436\u0435\u0440:</b> ${formatMessenger(messenger)}\n` +
     `\uD83D\uDCCD <b>\u0410\u0434\u0440\u0435\u0441:</b> ${cleanText(address)}\n` +

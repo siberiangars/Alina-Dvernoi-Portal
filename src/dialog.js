@@ -10,6 +10,8 @@ function createSession(chatId) {
     chatId,
     messages: [],
     collectedData: {
+      name: null,
+      nameSource: null,
       phone: null,           // валидный номер телефона
       phoneRaw: null,        // что написал клиент (если невалидный)
       phoneInvalid: false,   // true = попросить перепроверить

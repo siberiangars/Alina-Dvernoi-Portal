@@ -54,6 +54,39 @@ function validatePhone(raw) {
   return 'INVALID:' + raw;
 }
 
+function cleanClientName(raw) {
+  const name = String(raw || '')
+    .replace(/[^\p{L}\s.-]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!name || name.length < 2 || name.length > 40) return null;
+  if (/\u0430\u043b\u0438\u043d\u0430/i.test(name)) return null;
+  const bad = [
+    '\u0437\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435',
+    '\u043f\u0440\u0438\u0432\u0435\u0442',
+    '\u0434\u0432\u0435\u0440\u044c',
+    '\u043c\u043e\u043d\u0442\u0430\u0436',
+    '\u0437\u0430\u043c\u0435\u0440',
+  ];
+  if (bad.includes(name.toLowerCase())) return null;
+  return name;
+}
+
+function extractNameByRules(text) {
+  const original = String(text || '').trim();
+  const patterns = [
+    /(?:\u043c\u0435\u043d\u044f\s+\u0437\u043e\u0432\u0443\u0442|\u043c\u043e\u0435\s+\u0438\u043c\u044f)\s+([\p{L} .-]{2,40})/iu,
+    /(?:^|[.!?\n]\s*)\u044f\s+([\p{L} .-]{2,30})(?:[.!?\n]|$)/iu,
+    /^([\p{L} .-]{2,30})\s+\u044f(?:[.!?\n]|$)/iu,
+  ];
+  for (const pattern of patterns) {
+    const match = original.match(pattern);
+    const name = cleanClientName(match?.[1]);
+    if (name) return name;
+  }
+  return null;
+}
+
 function hasExplicitQuantityInText(text, qty) {
   const t = String(text || '').toLowerCase();
   const q = Number(qty);
@@ -79,6 +112,11 @@ function extractDataByRules(text) {
   const original = String(text || '').trim();
   const result = {};
   const hasAny = (items) => items.some((item) => t.includes(item));
+  const clientName = extractNameByRules(original);
+  if (clientName) {
+    result.name = clientName;
+    result.nameSource = 'dialog';
+  }
 
   const boughtMarkers = [
     '\u043a\u0443\u043f\u0438\u043b',
@@ -171,6 +209,7 @@ async function extractData(lastUserMessage, currentData) {
   const ruleBased = extractDataByRules(lastUserMessage);
   const userPrompt = `Извлеки данные из сообщения клиента. Верни ТОЛЬКО валидный JSON без markdown:
 {
+  "name": "имя клиента, только если клиент явно написал его в этом сообщении, иначе null",
   "phone": "номер телефона как написал клиент или null",
   "messenger": "telegram | max | null",
   "address": "адрес или район или null",
@@ -205,6 +244,17 @@ async function extractData(lastUserMessage, currentData) {
       }
     }
     Object.assign(result, ruleBased);
+
+    if (result.name) {
+      const name = cleanClientName(result.name);
+      if (name) {
+        result.name = name;
+        result.nameSource = 'dialog';
+      } else {
+        delete result.name;
+        delete result.nameSource;
+      }
+    }
 
     if (result.quantity !== undefined && result.quantity !== null) {
       const q = Number(result.quantity);
