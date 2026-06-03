@@ -11,7 +11,7 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const KRSK_OFFSET_MS = 7 * 60 * 60 * 1000;
 const REPORT_STATE_FILE = path.join(process.cwd(), 'data', 'report_state.json');
-const DUPLICATE_REPORT_WINDOW_MS = 5 * 60 * 1000;
+let reportsScheduled = false;
 
 const T = {
   title: '\uD83D\uDCCA <b>\u041e\u0442\u0447\u0435\u0442 \u043f\u043e \u0440\u0430\u0431\u043e\u0442\u0435 \u0410\u043b\u0438\u043d\u044b</b>',
@@ -72,7 +72,7 @@ function reserveReportSlot(hour) {
   const key = krskSlotKey(hour);
   const state = readReportState();
   const last = state[key];
-  if (last && Date.now() - Number(last) < DUPLICATE_REPORT_WINDOW_MS) {
+  if (last) {
     logger.warn(`Duplicate report skipped for slot ${key}`);
     return false;
   }
@@ -128,6 +128,12 @@ async function sendDailyReport(hour = null) {
 }
 
 function scheduleReports() {
+  if (reportsScheduled) {
+    logger.warn('Report scheduler already started, skipping duplicate scheduleReports() call');
+    return;
+  }
+  reportsScheduled = true;
+
   function scheduleOne(hour, label) {
     const delay = msUntilNextKrskHour(hour);
     const inMinutes = Math.round(delay / 60000);
