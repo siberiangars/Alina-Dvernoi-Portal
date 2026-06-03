@@ -25,6 +25,8 @@ let polling = false;
 let pollTimer = null;
 const BOT_STARTED_AT = Math.floor(Date.now() / 1000);
 const attentionSentMessageIds = new Set();
+const AVITO_BLOCKED_CHAT_RETRY_MS = parseInt(process.env.AVITO_BLOCKED_CHAT_RETRY_MS || String(10 * 60 * 1000), 10);
+const avitoBlockedUntilByChat = new Map();
 
 function isManualLockBypassed(chatId) {
   return String(process.env.MANUAL_LOCK_BYPASS_CHAT_IDS || '')
@@ -32,6 +34,20 @@ function isManualLockBypassed(chatId) {
     .map((id) => id.trim())
     .filter(Boolean)
     .includes(chatId);
+}
+
+function isAvitoBlockedChat(chatId) {
+  const until = avitoBlockedUntilByChat.get(chatId) || 0;
+  if (until > Date.now()) return true;
+  if (until) avitoBlockedUntilByChat.delete(chatId);
+  return false;
+}
+
+function blockAvitoChat(chatId, reason) {
+  const until = Date.now() + AVITO_BLOCKED_CHAT_RETRY_MS;
+  avitoBlockedUntilByChat.set(chatId, until);
+  const retryAt = new Date(until).toLocaleString('ru-RU', { timeZone: 'Asia/Krasnoyarsk' });
+  logger.warn(`[AVITO BLOCK] ${chatId} skipped until ${retryAt}: ${reason}`);
 }
 
 function randomDelay(text = '') {
@@ -223,21 +239,12 @@ async function processChat(chat) {
     messages = await avito.getChatMessages(chatId);
   } catch (err) {
     if (isHistoryReadBlocked(err)) {
-      logger.warn(`getChatMessages blocked (402) for ${chatId}, sending short fallback reply`);
       const lastId = chat?.last_message?.id;
       if (lastId) {
         avito.markProcessed(lastId);
       }
-      try {
-        const fallbackReply = 'Здравствуйте! Получили ваше сообщение. Повторите, пожалуйста, коротко ваш вопрос — и я сразу помогу.';
-        await sendBotMessage(chatId, fallbackReply);
-        logger.info(`OUT [${chatId}] ${fallbackReply.slice(0, 80)}`);
-        statsModule.incSent();
-        await avito.markChatRead(chatId);
-      } catch (sendErr) {
-        logger.error(`fallback send failed for ${chatId}: ${sendErr.stack}`);
-        statsModule.incError();
-      }
+      blockAvitoChat(chatId, 'Avito API returned 402 for chat history; send is usually blocked too');
+      statsModule.incError();
       return;
     } else {
     logger.error(`getChatMessages failed for ${chatId}: ${err.stack}`);
@@ -433,6 +440,10 @@ async function poll() {
       logger.info(`Chats needing reply: ${chats.length}`);
     }
     for (const chat of chats) {
+      if (isAvitoBlockedChat(chat.id)) {
+        logger.debug(`[AVITO BLOCK] ${chat.id} still in cooldown, skipping`);
+        continue;
+      }
       await processChat(chat);
       if (chats.length > 1) {
         await new Promise((r) => setTimeout(r, 1000));
