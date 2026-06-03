@@ -402,7 +402,7 @@ async function processChat(chat) {
   }
 
   if (!currentMessageIsCatalogRequest) {
-    reply = sanitizeReply(reply, { lastUserText: text, needsGreeting });
+    reply = sanitizeReply(reply, { lastUserText: text, needsGreeting, currentData: session.collectedData });
   }
   addMessage(chatId, 'assistant', reply);
 

@@ -75,7 +75,16 @@ function hasQuestion(text) {
   return /[?？]/.test(String(text || ''));
 }
 
-function nextStepQuestion(lastUserText) {
+function nextStepQuestion(lastUserText, currentData = {}) {
+  if (currentData.doorStatus && !currentData.address) {
+    return '\u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435 \u0430\u0434\u0440\u0435\u0441 \u0438\u043b\u0438 \u0440\u0430\u0439\u043e\u043d \u043e\u0431\u044a\u0435\u043a\u0442\u0430?';
+  }
+  if (currentData.doorStatus && !currentData.phone) {
+    return '\u041e\u0441\u0442\u0430\u0432\u044c\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430 — \u043c\u0430\u0441\u0442\u0435\u0440 \u0441\u0432\u044f\u0436\u0435\u0442\u0441\u044f \u0438 \u0441\u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440\u0443\u0435\u0442 \u043f\u043e \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0435.';
+  }
+  if (currentData.doorStatus && !currentData.messenger) {
+    return '\u041a\u0443\u0434\u0430 \u0443\u0434\u043e\u0431\u043d\u0435\u0435 \u043d\u0430\u043f\u0438\u0441\u0430\u0442\u044c: Telegram \u0438\u043b\u0438 Max?';
+  }
   const t = String(lastUserText || '').toLowerCase();
   if (/\u0437\u0430\u043c\u0435\u0440|\u043c\u043e\u043d\u0442\u0430\u0436|\u0443\u0441\u0442\u0430\u043d\u043e\u0432/u.test(t)) {
     return '\u0414\u0432\u0435\u0440\u044c \u0443\u0436\u0435 \u043a\u0443\u043f\u043b\u0435\u043d\u0430 \u0438\u043b\u0438 \u043d\u0443\u0436\u043d\u043e \u043f\u043e\u0434\u043e\u0431\u0440\u0430\u0442\u044c?';
@@ -89,18 +98,18 @@ function nextStepQuestion(lastUserText) {
   return '\u0414\u0432\u0435\u0440\u044c \u0443\u0436\u0435 \u043a\u0443\u043f\u043b\u0435\u043d\u0430 \u0438\u043b\u0438 \u043d\u0443\u0436\u043d\u043e \u043f\u043e\u0434\u043e\u0431\u0440\u0430\u0442\u044c?';
 }
 
-function safePriceReply(lastUserText, { needsGreeting = false } = {}) {
+function safePriceReply(lastUserText, { needsGreeting = false, currentData = {} } = {}) {
   const intro = needsGreeting
     ? '\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u041c\u0435\u043d\u044f \u0437\u043e\u0432\u0443\u0442 \u0410\u043b\u0438\u043d\u0430, \u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440 \u043c\u0430\u0433\u0430\u0437\u0438\u043d\u0430 \u0414\u0432\u0435\u0440\u043d\u043e\u0439 \u041f\u043e\u0440\u0442\u0430\u043b. '
     : '';
   const base = `${intro}\u0422\u043e\u0447\u043d\u0443\u044e \u0441\u0442\u043e\u0438\u043c\u043e\u0441\u0442\u044c \u0440\u0430\u0441\u0441\u0447\u0438\u0442\u044b\u0432\u0430\u0435\u0442 \u043c\u0430\u0441\u0442\u0435\u0440: \u0432\u0441\u0435 \u0437\u0430\u0432\u0438\u0441\u0438\u0442 \u043e\u0442 \u0434\u0432\u0435\u0440\u0438, \u043f\u0440\u043e\u0435\u043c\u0430 \u0438 \u0434\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0445 \u0440\u0430\u0431\u043e\u0442.`;
   if (userAskedPrice(lastUserText)) {
-    return `${base} ${nextStepQuestion(lastUserText)}`;
+    return `${base} ${nextStepQuestion(lastUserText, currentData)}`;
   }
   return `${base} \u042f \u043f\u0435\u0440\u0435\u0434\u0430\u043c \u0437\u0430\u043f\u0440\u043e\u0441 \u043c\u0430\u0441\u0442\u0435\u0440\u0443 \u0434\u043b\u044f \u0440\u0430\u0441\u0447\u0435\u0442\u0430.`;
 }
 
-function sanitizeReply(reply, { lastUserText = '', needsGreeting = false } = {}) {
+function sanitizeReply(reply, { lastUserText = '', needsGreeting = false, currentData = {} } = {}) {
   let out = (reply || '').trim();
   if (!out) return 'Подскажите, пожалуйста, подробнее по вашему вопросу.';
 
@@ -111,7 +120,7 @@ function sanitizeReply(reply, { lastUserText = '', needsGreeting = false } = {})
   out = out.replace(/as an ai|language model|i am a bot/gi, '');
 
   if (looksLikePriceQuote(out)) {
-    return safePriceReply(lastUserText, { needsGreeting });
+    return safePriceReply(lastUserText, { needsGreeting, currentData });
   }
 
   if (/\?{4,}/.test(out) || (out.match(/\?/g) || []).length >= 10) {
@@ -137,7 +146,7 @@ function sanitizeReply(reply, { lastUserText = '', needsGreeting = false } = {})
 
   out = trimSentences(out, 3);
   if (userAskedPrice(lastUserText) && !hasQuestion(out)) {
-    out = `${out.replace(/[.!]*$/, '')}. ${nextStepQuestion(lastUserText)}`;
+    out = `${out.replace(/[.!]*$/, '')}. ${nextStepQuestion(lastUserText, currentData)}`;
   }
   if (!out || /^(1\.|\d+\)|:)$/.test(out)) {
     return 'Подскажите, пожалуйста, подробнее по вашему вопросу.';
