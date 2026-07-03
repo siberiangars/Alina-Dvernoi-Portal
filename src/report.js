@@ -174,7 +174,7 @@ function updateDeepSeekBillingState(balance) {
 async function getDeepSeekBillingSummary() {
   const result = await fetchDeepSeekBalance();
   if (result.error) return { error: result.error };
-  return updateDeepSeekBillingState(result.balance);
+  return updateDeepSeekBillingStateClean(result.balance);
 }
 
 function formatDeepSeekBillingBlock(summary) {
@@ -194,13 +194,80 @@ function formatDeepSeekBillingBlock(summary) {
   );
 }
 
+function formatBillingMoney(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '\u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445';
+  return n.toFixed(4).replace(/\.?0+$/, '') || '0';
+}
+
+function updateDeepSeekBillingStateClean(balance) {
+  const dayKey = krskDayKey();
+  const state = readReportState();
+  const billing = state.deepseekBilling || {};
+  const current = Number(balance.total);
+  let start = Number(billing.startBalance);
+  let note = null;
+
+  if (billing.dayKey !== dayKey || !Number.isFinite(start)) {
+    start = current;
+    note = '\u0440\u0430\u0441\u0445\u043e\u0434 \u0441\u0447\u0438\u0442\u0430\u0435\u043c \u0441 \u043f\u0435\u0440\u0432\u043e\u0433\u043e \u0437\u0430\u043c\u0435\u0440\u0430 \u0431\u0430\u043b\u0430\u043d\u0441\u0430 \u0437\u0430 \u0441\u0435\u0433\u043e\u0434\u043d\u044f';
+  }
+
+  let spentToday = start - current;
+  if (spentToday < -0.000001) {
+    note = '\u0431\u0430\u043b\u0430\u043d\u0441 \u043f\u043e\u043f\u043e\u043b\u043d\u044f\u043b\u0441\u044f \u0441\u0435\u0433\u043e\u0434\u043d\u044f, \u0440\u0430\u0441\u0445\u043e\u0434 \u043f\u043e \u0440\u0430\u0437\u043d\u0438\u0446\u0435 \u0431\u0430\u043b\u0430\u043d\u0441\u0430 \u043d\u0435 \u0441\u0447\u0438\u0442\u0430\u0435\u043c';
+    start = current;
+    spentToday = 0;
+  }
+
+  state.deepseekBilling = {
+    dayKey,
+    currency: balance.currency,
+    startBalance: start,
+    lastBalance: current,
+    updatedAt: Date.now(),
+  };
+  writeReportState(state);
+
+  return {
+    balance,
+    spentToday: Math.max(spentToday, 0),
+    note,
+  };
+}
+
+function formatDeepSeekBillingBlockClean(summary) {
+  if (!summary || summary.error) {
+    return (
+      `\n${T.line}\n` +
+      `\uD83D\uDD11 <b>\u0411\u0430\u043b\u0430\u043d\u0441 \u043a\u043b\u044e\u0447\u0430 DeepSeek</b>\n` +
+      `\uD83D\uDCB0 <b>\u041e\u0441\u0442\u0430\u043b\u043e\u0441\u044c \u043d\u0430 \u0431\u0430\u043b\u0430\u043d\u0441\u0435:</b> \u043d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u044c\n` +
+      `\uD83D\uDCC9 <b>\u041f\u043e\u0442\u0440\u0430\u0447\u0435\u043d\u043e \u0441\u0435\u0433\u043e\u0434\u043d\u044f:</b> \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445`
+    );
+  }
+
+  const balanceText = `${formatBillingMoney(summary.balance.total)} ${summary.balance.currency}`;
+  const spentText = `${formatBillingMoney(summary.spentToday)} ${summary.balance.currency}`;
+  const noteText = summary.note
+    ? `\n\u2139\uFE0F <b>\u041f\u0440\u0438\u043c\u0435\u0447\u0430\u043d\u0438\u0435:</b> ${summary.note}`
+    : '';
+
+  return (
+    `\n${T.line}\n` +
+    `\uD83D\uDD11 <b>\u0411\u0430\u043b\u0430\u043d\u0441 \u043a\u043b\u044e\u0447\u0430 DeepSeek</b>\n` +
+    `\uD83D\uDCB0 <b>\u041e\u0441\u0442\u0430\u043b\u043e\u0441\u044c \u043d\u0430 \u0431\u0430\u043b\u0430\u043d\u0441\u0435:</b> ${balanceText}\n` +
+    `\uD83D\uDCC9 <b>\u041f\u043e\u0442\u0440\u0430\u0447\u0435\u043d\u043e \u0441\u0435\u0433\u043e\u0434\u043d\u044f:</b> ${spentText}` +
+    noteText
+  );
+}
+
 async function sendDailyReport(hour = null) {
   if (!reserveReportSlot(hour)) return;
 
   const s = stats.getAndReset();
   const deepSeekBilling = await getDeepSeekBillingSummary();
   const deepSeekBillingBlock = shouldIncludeDeepSeekBilling(hour)
-    ? formatDeepSeekBillingBlock(deepSeekBilling)
+    ? formatDeepSeekBillingBlockClean(deepSeekBilling)
     : '';
   const period = `${fmtTime(s.periodStart)} - ${fmtTime(s.periodEnd)}`;
   const convRate = s.chatsReplied > 0 ? Math.round((s.leadsTotal / s.chatsReplied) * 100) : 0;
@@ -266,9 +333,9 @@ module.exports = {
   scheduleReports,
   msUntilNextKrskHour,
   __test: {
-    formatDeepSeekBillingBlock,
+    formatDeepSeekBillingBlock: formatDeepSeekBillingBlockClean,
     shouldIncludeDeepSeekBilling,
     parseDeepSeekBalance,
-    updateDeepSeekBillingState,
+    updateDeepSeekBillingState: updateDeepSeekBillingStateClean,
   },
 };
