@@ -46,9 +46,21 @@ function normalizeCompanyPhone(raw) {
   return raw || '';
 }
 
-function trimSentences(text, maxSentences = 3) {
+function trimSentences(text, maxSentences = 5) {
   const parts = (text || '').split(/(?<=[.!?])\s+/).filter(Boolean);
   return parts.slice(0, maxSentences).join(' ').trim();
+}
+
+function getTimeGreeting() {
+  const hour = Number(new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Krasnoyarsk', hour: 'numeric', hour12: false }));
+  if (hour < 12) return 'Доброе утро';
+  if (hour < 18) return 'Добрый день';
+  return 'Добрый вечер';
+}
+
+function hasGreeting(text) {
+  const t = (text || '').toLowerCase();
+  return /^(здравствуйте|доброе утро|добрый день|добрый вечер|приветствую|здравствуй|привет|доброго времени)/i.test(t.trim());
 }
 
 function looksLikePriceQuote(text) {
@@ -62,62 +74,142 @@ function looksLikePriceQuote(text) {
 function userAskedPrice(userText) {
   const t = String(userText || '').toLowerCase();
   return (
-    /\u0441\u043a\u043e\u043b\u044c\u043a/u.test(t) ||
-    /\u0446\u0435\u043d/u.test(t) ||
-    /\u0441\u0442\u043e\u0438/u.test(t) ||
-    /\u0440\u0430\u0441\u0441\u0447/u.test(t) ||
-    /\u043f\u0440\u0430\u0439\u0441/u.test(t) ||
-    /\u0434\u043e\u0440\u043e\u0433/u.test(t)
+    /сколько/iu.test(t) ||
+    /цен/iu.test(t) ||
+    /стои/iu.test(t) ||
+    /рассч/iu.test(t) ||
+    /прайс/iu.test(t) ||
+    /дорог/iu.test(t)
   );
+}
+
+function userAskedMeasurement(userText) {
+  const t = String(userText || '').toLowerCase();
+  return /замер|измер|обмер|приехать|приезд|выезд/iu.test(t);
+}
+
+function userAskedInstall(userText) {
+  const t = String(userText || '').toLowerCase();
+  return /установ|монтаж|смонтир|вставить|поставить/iu.test(t);
+}
+
+function userAskedAddress(userText) {
+  const t = String(userText || '').toLowerCase();
+  return /(где находитесь|где вы|адрес|куда ехать|куда подъехать|как доехать)/iu.test(t);
 }
 
 function hasQuestion(text) {
   return /[?？]/.test(String(text || ''));
 }
 
+function removeContradictoryKnownDataQuestions(text, currentData = {}) {
+  let out = String(text || '').trim();
+  if (currentData.doorStatus || currentData.serviceOnly) {
+    out = out
+      .split(/(?<=[.!?])\s+/)
+      .filter((sentence) => !/(уже\s+куплен[аыо]?|купили|куплено)[^.!?]{0,80}(нужно\s+подобр|подобрать|выбрать)/iu.test(sentence))
+      .join(' ')
+      .trim();
+    out = out.replace(/\s*Двер[ьи]\s+уже\s+куплен[аыо]?\s+или\s+нужно\s+подобр[а-яё]+\??/giu, '').trim();
+  }
+  return out;
+}
+
 function nextStepQuestion(lastUserText, currentData = {}) {
+  if (currentData.serviceOnly) {
+    if (!currentData.address) return 'Скиньте, пожалуйста, фото проёмов и напишите адрес объекта.';
+    if (!currentData.phone) return 'Оставьте, пожалуйста, номер телефона — мастер свяжется и сориентирует по работам.';
+    if (!currentData.messenger) return 'Куда удобнее написать: Telegram или Max?';
+    return 'Передам информацию мастеру, он свяжется и уточнит детали.';
+  }
   if (currentData.doorStatus && !currentData.address) {
-    return '\u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435 \u0430\u0434\u0440\u0435\u0441 \u0438\u043b\u0438 \u0440\u0430\u0439\u043e\u043d \u043e\u0431\u044a\u0435\u043a\u0442\u0430?';
+    return 'Подскажите адрес или район объекта?';
   }
   if (currentData.doorStatus && !currentData.phone) {
-    return '\u041e\u0441\u0442\u0430\u0432\u044c\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430 — \u043c\u0430\u0441\u0442\u0435\u0440 \u0441\u0432\u044f\u0436\u0435\u0442\u0441\u044f \u0438 \u0441\u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440\u0443\u0435\u0442 \u043f\u043e \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0435.';
+    return 'Оставьте, пожалуйста, номер телефона — мастер свяжется и сориентирует по установке.';
   }
   if (currentData.doorStatus && !currentData.messenger) {
-    return '\u041a\u0443\u0434\u0430 \u0443\u0434\u043e\u0431\u043d\u0435\u0435 \u043d\u0430\u043f\u0438\u0441\u0430\u0442\u044c: Telegram \u0438\u043b\u0438 Max?';
+    return 'Куда удобнее написать: Telegram или Max?';
   }
   const t = String(lastUserText || '').toLowerCase();
-  if (/\u0437\u0430\u043c\u0435\u0440|\u043c\u043e\u043d\u0442\u0430\u0436|\u0443\u0441\u0442\u0430\u043d\u043e\u0432/u.test(t)) {
-    return '\u0414\u0432\u0435\u0440\u044c \u0443\u0436\u0435 \u043a\u0443\u043f\u043b\u0435\u043d\u0430 \u0438\u043b\u0438 \u043d\u0443\u0436\u043d\u043e \u043f\u043e\u0434\u043e\u0431\u0440\u0430\u0442\u044c?';
+  if (/замер|мониторинг|установ/iu.test(t)) {
+    return 'Дверь уже куплена или нужно подобрать?';
   }
-  if (/\u0432\u0445\u043e\u0434\u043d|\u0442\u0435\u0440\u043c\u043e\u0440\u0430\u0437\u0440\u044b\u0432|\u043c\u0435\u0442\u0430\u043b/u.test(t)) {
-    return '\u0414\u0432\u0435\u0440\u044c \u043d\u0443\u0436\u043d\u0430 \u0441 \u043c\u043e\u043d\u0442\u0430\u0436\u043e\u043c?';
+  if (/входн|терморазрыв|метал/iu.test(t)) {
+    return 'Дверь нужна с монтажом?';
   }
-  if (/\u043c\u0435\u0436\u043a\u043e\u043c\u043d\u0430\u0442|\u0434\u043e\u0431\u043e\u0440|\u043d\u0430\u043b\u0438\u0447\u043d|\u0437\u0430\u043c\u043e\u043a/u.test(t)) {
-    return '\u0421\u043a\u043e\u043b\u044c\u043a\u043e \u0434\u0432\u0435\u0440\u0435\u0439 \u043d\u0443\u0436\u043d\u043e \u0438 \u043c\u043e\u043d\u0442\u0430\u0436 \u043f\u043e\u0442\u0440\u0435\u0431\u0443\u0435\u0442\u0441\u044f?';
+  if (/межкомнат|добор|наличник|замок/iu.test(t)) {
+    return 'Сколько дверей нужно и монтаж потребуется?';
   }
-  return '\u0414\u0432\u0435\u0440\u044c \u0443\u0436\u0435 \u043a\u0443\u043f\u043b\u0435\u043d\u0430 \u0438\u043b\u0438 \u043d\u0443\u0436\u043d\u043e \u043f\u043e\u0434\u043e\u0431\u0440\u0430\u0442\u044c?';
+  return 'Дверь уже куплена или нужно подобрать?';
 }
 
 function safePriceReply(lastUserText, { needsGreeting = false, currentData = {} } = {}) {
   const intro = needsGreeting
-    ? '\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u041c\u0435\u043d\u044f \u0437\u043e\u0432\u0443\u0442 \u0410\u043b\u0438\u043d\u0430, \u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440 \u043c\u0430\u0433\u0430\u0437\u0438\u043d\u0430 \u0414\u0432\u0435\u0440\u043d\u043e\u0439 \u041f\u043e\u0440\u0442\u0430\u043b. '
+    ? getTimeGreeting() + '! Меня зовут Алина, менеджер магазина Дверной Портал. '
     : '';
-  const base = `${intro}\u0422\u043e\u0447\u043d\u0443\u044e \u0441\u0442\u043e\u0438\u043c\u043e\u0441\u0442\u044c \u0440\u0430\u0441\u0441\u0447\u0438\u0442\u044b\u0432\u0430\u0435\u0442 \u043c\u0430\u0441\u0442\u0435\u0440: \u0432\u0441\u0435 \u0437\u0430\u0432\u0438\u0441\u0438\u0442 \u043e\u0442 \u0434\u0432\u0435\u0440\u0438, \u043f\u0440\u043e\u0435\u043c\u0430 \u0438 \u0434\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0445 \u0440\u0430\u0431\u043e\u0442.`;
+  const base = `${intro}Точную стоимость рассчитывает мастер: все зависит от двери, проема и дополнительных работ.`;
   if (userAskedPrice(lastUserText)) {
     return `${base} ${nextStepQuestion(lastUserText, currentData)}`;
   }
-  return `${base} \u042f \u043f\u0435\u0440\u0435\u0434\u0430\u043c \u0437\u0430\u043f\u0440\u043e\u0441 \u043c\u0430\u0441\u0442\u0435\u0440\u0443 \u0434\u043b\u044f \u0440\u0430\u0441\u0447\u0435\u0442\u0430.`;
+  return `${base} Я передам запрос мастеру для расчета.`;
+}
+
+function smartFallback(lastUserText, currentData = {}, needsGreeting = false) {
+  // Генерируем осмысленный фоллбэк вместо тупого «Подскажите подробнее»
+  const t = String(lastUserText || '').toLowerCase();
+
+  if (userAskedAddress(t)) {
+    return 'Мы находимся в Красноярске, улица Карамзина 10. Работаем пн-пт 11:30-19:00, сб 11:30-17:00. Какая дверь вас интересует?';
+  }
+
+  if (userAskedMeasurement(t)) {
+    if (currentData.doorStatus || currentData.serviceOnly) {
+      return 'Поняла насчёт замера. Оставьте адрес и номер телефона — мастер свяжется и договорится о выезде.';
+    }
+    return 'Поняла насчёт замера. Дверь уже куплена или нужно подобрать?';
+  }
+
+  if (userAskedInstall(t)) {
+    if (currentData.serviceOnly) {
+      return 'Поняла, нужны работы по установке. Скиньте фото проёмов и напишите адрес объекта — мастер сориентирует по расчёту.';
+    }
+    if (currentData.doorStatus === 'нужно подобрать') {
+      return 'Поняла, нужна установка. Для начала — какую дверь рассматриваете: входную или межкомнатную?';
+    }
+    if (currentData.doorStatus === 'куплены') {
+      return 'Поняла, нужна установка готовой двери. Оставьте адрес и телефон — мастер сориентирует по стоимости и времени.';
+    }
+    return 'Дверь уже куплена или нужно подобрать? И нужна ли установка?';
+  }
+
+  if (userAskedPrice(t)) {
+    return safePriceReply(lastUserText, { needsGreeting, currentData });
+  }
+
+  // Общий фоллбэк с учётом состояния
+  const question = nextStepQuestion(lastUserText, currentData);
+  const greeting = needsGreeting ? getTimeGreeting() + '! ' : '';
+  return `${greeting}${question}`;
 }
 
 function sanitizeReply(reply, { lastUserText = '', needsGreeting = false, currentData = {} } = {}) {
   let out = (reply || '').trim();
-  if (!out) return 'Подскажите, пожалуйста, подробнее по вашему вопросу.';
+  if (!out) return smartFallback(lastUserText, currentData, needsGreeting);
 
   out = stripUrls(out);
   out = stripMarkdown(out);
+  out = out.replace(/Меня зовут Алина,\s*менедж\.(?=\s|$)/iu, 'Меня зовут Алина, менеджер магазина Дверной Портал.');
   out = out.replace(/\s+/g, ' ').trim();
   out = out.replace(/whatsapp|viber|вайбер/gi, 'Telegram или Max');
   out = out.replace(/as an ai|language model|i am a bot/gi, '');
+
+  // Enforce greeting on first message — DeepSeek sometimes skips it
+  if (needsGreeting && !hasGreeting(out)) {
+    const hasFullIntro = /меня зовут алина/i.test(out.toLowerCase());
+    const prefix = hasFullIntro ? getTimeGreeting() + '! ' : getTimeGreeting() + '! Меня зовут Алина, менеджер магазина Дверной Портал. ';
+    out = prefix + out;
+  }
 
   if (looksLikePriceQuote(out)) {
     return safePriceReply(lastUserText, { needsGreeting, currentData });
@@ -144,12 +236,14 @@ function sanitizeReply(reply, { lastUserText = '', needsGreeting = false, curren
     }
   }
 
-  out = trimSentences(out, 3);
+  out = trimSentences(out, 5);
+  out = removeContradictoryKnownDataQuestions(out, currentData);
   if (userAskedPrice(lastUserText) && !hasQuestion(out)) {
     out = `${out.replace(/[.!]*$/, '')}. ${nextStepQuestion(lastUserText, currentData)}`;
   }
+  out = removeContradictoryKnownDataQuestions(out, currentData);
   if (!out || /^(1\.|\d+\)|:)$/.test(out)) {
-    return 'Подскажите, пожалуйста, подробнее по вашему вопросу.';
+    return smartFallback(lastUserText, currentData, needsGreeting);
   }
   return out;
 }

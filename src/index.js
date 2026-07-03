@@ -25,8 +25,7 @@ let polling = false;
 let pollTimer = null;
 const BOT_STARTED_AT = Math.floor(Date.now() / 1000);
 const attentionSentMessageIds = new Set();
-const AVITO_BLOCKED_CHAT_RETRY_MS = parseInt(process.env.AVITO_BLOCKED_CHAT_RETRY_MS || String(10 * 60 * 1000), 10);
-const avitoBlockedUntilByChat = new Map();
+const importantAttentionSentChatIds = new Set();
 
 function isManualLockBypassed(chatId) {
   return String(process.env.MANUAL_LOCK_BYPASS_CHAT_IDS || '')
@@ -34,20 +33,6 @@ function isManualLockBypassed(chatId) {
     .map((id) => id.trim())
     .filter(Boolean)
     .includes(chatId);
-}
-
-function isAvitoBlockedChat(chatId) {
-  const until = avitoBlockedUntilByChat.get(chatId) || 0;
-  if (until > Date.now()) return true;
-  if (until) avitoBlockedUntilByChat.delete(chatId);
-  return false;
-}
-
-function blockAvitoChat(chatId, reason) {
-  const until = Date.now() + AVITO_BLOCKED_CHAT_RETRY_MS;
-  avitoBlockedUntilByChat.set(chatId, until);
-  const retryAt = new Date(until).toLocaleString('ru-RU', { timeZone: 'Asia/Krasnoyarsk' });
-  logger.warn(`[AVITO BLOCK] ${chatId} skipped until ${retryAt}: ${reason}`);
 }
 
 function randomDelay(text = '') {
@@ -97,11 +82,35 @@ function timeGreeting() {
 }
 
 function isSystemMessage(msg) {
+  if (msg.type === 'image') return false;
   if (msg.type !== 'text') return true;
   const text = msg.content?.text || '';
   if (!text.trim()) return true;
   if (text.startsWith('[Системное сообщение]')) return true;
   return false;
+}
+
+function getMessageText(msg) {
+  if (msg.type === 'image') {
+    return avito.isOwnMessage(msg) ? '[Мы отправили фото]' : '[Клиент отправил фото]';
+  }
+  return msg.content?.text || '';
+}
+
+function getImageUrl(msg) {
+  if (msg.type !== 'image') return null;
+  const sizes = msg.content?.image?.sizes || {};
+  return sizes['1280x960'] || sizes['640x480'] || sizes['140x105'] || sizes['32x32'] || null;
+}
+
+function collectClientImageUrls(messages, limit = 8) {
+  const urls = [];
+  for (const msg of messages) {
+    if (avito.isOwnMessage(msg)) continue;
+    const url = getImageUrl(msg);
+    if (url && !urls.includes(url)) urls.push(url);
+  }
+  return urls.slice(-limit);
 }
 
 function currentMessageLooksLikePhone(text) {
@@ -156,6 +165,26 @@ function shouldAskMessenger(collectedData, lastUserText) {
   );
 }
 
+function hasLeadSignal(text, collectedData = {}) {
+  return Boolean(
+    collectedData.phone &&
+    (
+      collectedData.address ||
+      collectedData.doorType ||
+      collectedData.doorStatus ||
+      collectedData.quantity ||
+      collectedData.needsInstall !== null ||
+      collectedData.readyProems !== null ||
+      collectedData.additionalWork ||
+      collectedData.notes ||
+      isPriceQuestion(text) ||
+      isMeasurementRequest(text) ||
+      isInstallRequest(text) ||
+      isCatalogRequest(text)
+    )
+  );
+}
+
 function needsManagerAttention(text) {
   const t = String(text || '').toLowerCase();
   return (
@@ -188,6 +217,34 @@ function isCatalogRequest(text) {
   );
 }
 
+function isPriceQuestion(text) {
+  const t = String(text || '').toLowerCase();
+  return /сколько|цен|стои|рассч|прайс|дорог/iu.test(t);
+}
+
+function isMeasurementRequest(text) {
+  const t = String(text || '').toLowerCase();
+  return /замер|измер|обмер|выезд|приехать|мастер/iu.test(t);
+}
+
+function isInstallRequest(text) {
+  const t = String(text || '').toLowerCase();
+  return /установ|монтаж|смонтир|поставить|вставить|откос|добор|наличник|замок/iu.test(t);
+}
+
+function isImportantDialogWithoutPhone(text, collectedData = {}) {
+  if (collectedData.phone) return false;
+  return isPriceQuestion(text) || isMeasurementRequest(text) || isInstallRequest(text) || isCatalogRequest(text);
+}
+
+// Anti-goodbye-loop: не отвечаем на благодарности когда диалог уже завершён
+function isGoodbyeLoop(lastUserText, collectedData) {
+  const t = String(lastUserText || '').toLowerCase();
+  const thanks = /^(спасибо|благодарю|хорошо|ок|понял|принял|договорились|отлично|супер|замечательно|ясно|добро)/i;
+  if (!thanks.test(t)) return false;
+  if (!collectedData.phone) return false;
+  return true;
+}
 function catalogReply(needsGreeting = false) {
   const intro = needsGreeting
     ? '\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435! \u041c\u0435\u043d\u044f \u0437\u043e\u0432\u0443\u0442 \u0410\u043b\u0438\u043d\u0430, \u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440 \u043c\u0430\u0433\u0430\u0437\u0438\u043d\u0430 \u0414\u0432\u0435\u0440\u043d\u043e\u0439 \u041f\u043e\u0440\u0442\u0430\u043b. '
@@ -239,12 +296,21 @@ async function processChat(chat) {
     messages = await avito.getChatMessages(chatId);
   } catch (err) {
     if (isHistoryReadBlocked(err)) {
+      logger.warn(`getChatMessages blocked (402) for ${chatId}, sending short fallback reply`);
       const lastId = chat?.last_message?.id;
       if (lastId) {
         avito.markProcessed(lastId);
       }
-      blockAvitoChat(chatId, 'Avito API returned 402 for chat history; send is usually blocked too');
-      statsModule.incError();
+      try {
+        const fallbackReply = 'Здравствуйте! Получили ваше сообщение. Повторите, пожалуйста, коротко ваш вопрос — и я сразу помогу.';
+        await sendBotMessage(chatId, fallbackReply);
+        logger.info(`OUT [${chatId}] ${fallbackReply.slice(0, 80)}`);
+        statsModule.incSent();
+        await avito.markChatRead(chatId);
+      } catch (sendErr) {
+        logger.error(`fallback send failed for ${chatId}: ${sendErr.stack}`);
+        statsModule.incError();
+      }
       return;
     } else {
     logger.error(`getChatMessages failed for ${chatId}: ${err.stack}`);
@@ -290,6 +356,8 @@ async function processChat(chat) {
   // Если чат заблокирован оператором — молчим
   if (!bypassManualLock && manualLocks.isLocked(chatId)) {
     logger.debug(`[LOCKED] ${chatId} — operator took over, bot silent`);
+    if (lastMsg?.id) avito.markProcessed(lastMsg.id);
+    await avito.markChatRead(chatId);
     return;
   }
 
@@ -317,7 +385,7 @@ async function processChat(chat) {
   const isNewChat = !hasSession(chatId);
   const session = getSession(chatId);
   const profileName = getClientName(chat);
-  if (!session.collectedData.name && profileName) {
+  if (profileName && !session.collectedData.name) {
     mergeData(chatId, { name: profileName, nameSource: 'profile' });
   }
   if (leads.isLeadSent(chatId)) {
@@ -328,9 +396,9 @@ async function processChat(chat) {
     logger.info(`New chat: ${chatId}`);
     for (const msg of realMessages.slice(0, -1)) {
       const role = avito.isOwnMessage(msg) ? 'assistant' : 'user';
-      const text = msg.content?.text || '';
+      const text = getMessageText(msg);
       if (text) addMessage(chatId, role, text);
-      if (role === 'user' && text) {
+      if (role === 'user' && msg.type === 'text' && text) {
         const historicalData = extractDataByRules(text);
         if (Object.keys(historicalData).length > 0) {
           mergeData(chatId, historicalData);
@@ -341,7 +409,7 @@ async function processChat(chat) {
   }
 
   avito.markProcessed(lastMsg.id);
-  const text = lastMsg.content?.text || '';
+  const text = getMessageText(lastMsg);
   logger.info(`IN  [${chatId}] ${text.slice(0, 80)}`);
   statsModule.incReceived(chatId);
 
@@ -369,6 +437,12 @@ async function processChat(chat) {
     if (session.collectedData.phone) {
       statsModule.addPhone(session.collectedData.phone);
     }
+  }
+
+  if (isGoodbyeLoop(text, session.collectedData)) {
+    logger.info(`[GOODBYE LOOP] ${chatId} — skipping reply to avoid infinite thanks`);
+    await avito.markChatRead(chatId);
+    return;
   }
 
   const isFirstMessage = session.messages.length === 1;
@@ -418,11 +492,33 @@ async function processChat(chat) {
     return;
   }
 
-  const { phone, address } = session.collectedData;
-  if (phone && address && !session.leadSent && !leads.isLeadSent(chatId) && !isNotLeadContext(text)) {
+  if (
+    !session.leadSent &&
+    !leads.isLeadSent(chatId) &&
+    !importantAttentionSentChatIds.has(chatId) &&
+    isImportantDialogWithoutPhone(text, session.collectedData) &&
+    !isNotLeadContext(text)
+  ) {
+    importantAttentionSentChatIds.add(chatId);
+    try {
+      await sendAttention(chatId, {
+        name: session.collectedData.name || getClientName(chat),
+        reason: 'Важный диалог без телефона: клиент обсуждает двери, монтаж, замер, цену или каталог.',
+        action: 'Проверьте чат Avito вручную, если клиент не оставит телефон. Нужно довести до контакта или заявки.',
+        lastMessage: text,
+      });
+    } catch (err) {
+      logger.error(`sendImportantAttention failed for ${chatId}: ${err.stack || err.message}`);
+      statsModule.incError();
+    }
+  }
+
+  if (hasLeadSignal(text, session.collectedData) && !session.leadSent && !leads.isLeadSent(chatId) && !isNotLeadContext(text)) {
     session.leadSent = true;
-    await sendLead(chatId, session.collectedData);
-    statsModule.incLead(phone);
+    await sendLead(chatId, session.collectedData, {
+      imageUrls: collectClientImageUrls(realMessages),
+    });
+    statsModule.incLead(session.collectedData.phone);
     leads.markLeadSent(chatId); // сохраняем в файл — варм-ап не тронет этот чат
   }
 
@@ -440,10 +536,6 @@ async function poll() {
       logger.info(`Chats needing reply: ${chats.length}`);
     }
     for (const chat of chats) {
-      if (isAvitoBlockedChat(chat.id)) {
-        logger.debug(`[AVITO BLOCK] ${chat.id} still in cooldown, skipping`);
-        continue;
-      }
       await processChat(chat);
       if (chats.length > 1) {
         await new Promise((r) => setTimeout(r, 1000));
@@ -464,7 +556,12 @@ async function start() {
   logger.info(`Bot started. Poll interval: ${POLL_INTERVAL_MS}ms`);
   scheduleReports();
   // Сначала помечаем все существующие сообщения как виденные — не отвечаем на старые
-  await avito.initProcessed();
+  try {
+    await avito.initProcessed();
+  } catch (err) {
+    logger.error(`initProcessed failed, continuing polling: ${err.stack || err.message}`);
+    statsModule.incError();
+  }
 
   // Прогрев замороженных (3+ дней тишины)
   if (ENABLE_WARMING) {

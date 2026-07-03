@@ -4,10 +4,14 @@ require('dotenv').config({ override: true });
 const axios = require('axios');
 const logger = require('./logger');
 
-const MODEL = 'claude-sonnet-4-5-20250929';
-const API_URL = 'https://api.anthropic.com/v1/messages';
+// --- Провайдер выбирается через AI_PROVIDER ---
+const PROVIDER = process.env.AI_PROVIDER || 'deepseek';
 
-function getHeaders() {
+// --- Claude (Anthropic) ---
+const CLAUDE_MODEL = 'claude-sonnet-4-5-20250929';
+const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
+
+function getClaudeHeaders() {
   return {
     'x-api-key': process.env.ANTHROPIC_API_KEY,
     'anthropic-version': '2023-06-01',
@@ -15,42 +19,93 @@ function getHeaders() {
   };
 }
 
+// --- DeepSeek (OpenAI-compatible) ---
+const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
+const DEEPSEEK_API_URL = process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1/chat/completions';
+
+function getDeepSeekHeaders() {
+  return {
+    'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+    'Content-Type': 'application/json',
+  };
+}
+
+function getHeaders() {
+  if (PROVIDER === 'claude') return getClaudeHeaders();
+  return getDeepSeekHeaders();
+}
+
+function getApiUrl() {
+  if (PROVIDER === 'claude') return CLAUDE_API_URL;
+  return DEEPSEEK_API_URL;
+}
+
+function getModel() {
+  if (PROVIDER === 'claude') return CLAUDE_MODEL;
+  return DEEPSEEK_MODEL;
+}
+
+// ============================================================
+// GENERATE REPLY — единственный AI-вызов (generateReply)
+// ============================================================
+
 async function generateReply(systemPrompt, messages) {
   const attempt = async () => {
-    const response = await axios.post(API_URL, {
-      model: MODEL,
-      max_tokens: 300,
-      temperature: 0.75,
-      system: systemPrompt,
-      messages,
-    }, { headers: getHeaders() });
-    return response.data.content[0].text;
+    let requestBody;
+    let response;
+
+    if (PROVIDER === 'claude') {
+      requestBody = {
+        model: CLAUDE_MODEL,
+        max_tokens: 600,
+        temperature: 0.75,
+        system: systemPrompt,
+        messages,
+      };
+      response = await axios.post(CLAUDE_API_URL, requestBody, {
+        headers: getClaudeHeaders(),
+        timeout: 20000,
+      });
+      return response.data.content[0].text;
+    } else {
+      const dsMessages = [{ role: 'system', content: systemPrompt }, ...messages];
+      requestBody = {
+        model: DEEPSEEK_MODEL,
+        max_tokens: 600,
+        temperature: 0.75,
+        messages: dsMessages,
+      };
+      response = await axios.post(DEEPSEEK_API_URL, requestBody, {
+        headers: getDeepSeekHeaders(),
+        timeout: 15000,
+      });
+      return response.data.choices[0].message.content;
+    }
   };
 
   try {
     return await attempt();
   } catch (err) {
     const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
-    logger.warn(`Claude generateReply error, retrying in 3s: ${detail}`);
+    logger.warn(`${PROVIDER} generateReply error, retrying in 3s: ${detail}`);
     await new Promise((r) => setTimeout(r, 3000));
     return await attempt();
   }
 }
 
-// Валидация российского номера телефона
-// Допустимые форматы: +7XXXXXXXXXX, 8XXXXXXXXXX, 7XXXXXXXXXX, 9XXXXXXXXXX (10 цифр без кода)
+// ============================================================
+// RULE-BASED DATA EXTRACTION — NO AI CALLS
+// ============================================================
+
 function validatePhone(raw) {
   if (!raw) return null;
   const digits = raw.replace(/\D/g, '');
-  // 11 цифр начиная с 7 или 8
   if (digits.length === 11 && (digits[0] === '7' || digits[0] === '8')) {
     return '+7' + digits.slice(1);
   }
-  // 10 цифр — добавляем +7
   if (digits.length === 10 && digits[0] === '9') {
     return '+7' + digits;
   }
-  // Любое другое количество цифр — невалидный номер
   return 'INVALID:' + raw;
 }
 
@@ -60,14 +115,8 @@ function cleanClientName(raw) {
     .replace(/\s+/g, ' ')
     .trim();
   if (!name || name.length < 2 || name.length > 40) return null;
-  if (/\u0430\u043b\u0438\u043d\u0430/i.test(name)) return null;
-  const bad = [
-    '\u0437\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435',
-    '\u043f\u0440\u0438\u0432\u0435\u0442',
-    '\u0434\u0432\u0435\u0440\u044c',
-    '\u043c\u043e\u043d\u0442\u0430\u0436',
-    '\u0437\u0430\u043c\u0435\u0440',
-  ];
+  if (/алина/i.test(name)) return null;
+  const bad = ['здравствуйте', 'привет', 'дверь', 'монтаж', 'замер'];
   if (bad.includes(name.toLowerCase())) return null;
   return name;
 }
@@ -75,9 +124,9 @@ function cleanClientName(raw) {
 function extractNameByRules(text) {
   const original = String(text || '').trim();
   const patterns = [
-    /(?:\u043c\u0435\u043d\u044f\s+\u0437\u043e\u0432\u0443\u0442|\u043c\u043e\u0435\s+\u0438\u043c\u044f)\s+([\p{L} .-]{2,40})/iu,
-    /(?:^|[.!?\n]\s*)\u044f\s+([\p{L} .-]{2,30})(?:[.!?\n]|$)/iu,
-    /^([\p{L} .-]{2,30})\s+\u044f(?:[.!?\n]|$)/iu,
+    /(?:меня\s+зовут|мое\s+имя)\s+([\p{L} .-]{2,40})/iu,
+    /(?:^|[.!?\n]\s*)я\s+([\p{L} .-]{2,30})(?:[.!?\n]|$)/iu,
+    /^([\p{L} .-]{2,30})\s+я(?:[.!?\n]|$)/iu,
   ];
   for (const pattern of patterns) {
     const match = original.match(pattern);
@@ -96,15 +145,51 @@ function hasExplicitQuantityInText(text, qty) {
   if (!hasStandalone) return false;
 
   const withDoorWord = new RegExp(
-    `(?:^|[^\\p{L}\\p{N}])${q}\\s*(\\u0448\\u0442|\\u0448\\u0442\\.|\\u0448\\u0442\\u0443\\u043a\\u0438?|\\u0434\\u0432\\u0435\\u0440\\u0438?|\\u043f\\u043e\\u043b\\u043e\\u0442\\u043d\\u0430?)`,
+    `(?:^|[^\\p{L}\\p{N}])${q}\\s*(шт|шт\\.|штуки?|двери?|полотна?)`,
     'u'
   ).test(t);
   const withIntent = new RegExp(
-    `(\\u043d\\u0443\\u0436\\u043d\\u043e|\\u043d\\u0430\\u0434\\u043e|\\u0442\\u0440\\u0435\\u0431\\u0443\\u0435\\u0442\\u0441\\u044f|\\u0445\\u043e\\u0447\\u0443|\\u043f\\u043b\\u0430\\u043d\\u0438\\u0440\\u0443\\u044e|\\u0443\\u0441\\u0442\\u0430\\u043d\\u043e\\u0432\\u0438\\u0442\\u044c|\\u0437\\u0430\\u043c\\u0435\\u043d\\u0438\\u0442\\u044c)\\s*[^\\n]{0,30}(?:^|[^\\p{L}\\p{N}])${q}(?:[^\\p{L}\\p{N}]|$)`,
+    `(нужно|надо|требуется|хочу|планирую|установить|заменить)\\s*[^\\n]{0,30}(?:^|[^\\p{L}\\p{N}])${q}(?:[^\\p{L}\\p{N}]|$)`,
     'u'
   ).test(t);
 
   return withDoorWord || withIntent;
+}
+
+function extractQuantityByRules(text) {
+  const original = String(text || '');
+  const t = original.toLowerCase();
+  const wordNumbers = [
+    ['одну', 1], ['одна', 1], ['один', 1], ['две', 2], ['два', 2], ['двух', 2], ['три', 3], ['трех', 3], ['трёх', 3],
+    ['четыре', 4], ['четырех', 4], ['четырёх', 4], ['пять', 5], ['пяти', 5], ['шесть', 6], ['шести', 6], ['семь', 7], ['восемь', 8], ['девять', 9], ['десять', 10],
+  ];
+
+  const digitMatches = [...t.matchAll(/(?:^|[^\p{L}\p{N}])(\d{1,2})\s*(?:шт|шт\.|штук|штуки?|двери?|полотна?|проема?|проёма?)(?:[^\p{L}\p{N}]|$)/giu)];
+  if (digitMatches.length > 0) {
+    const nums = digitMatches.map((m) => Number(m[1])).filter((n) => Number.isFinite(n) && n > 0 && n <= 50);
+    if (nums.length > 0) return nums.reduce((a, b) => a + b, 0);
+  }
+
+  let total = 0;
+  for (const [word, value] of wordNumbers) {
+    const re = new RegExp(`(?:^|[^\\p{L}\\p{N}])${word}\\s+(?:шт|штук|штуки?|(?:[\\p{L}-]+\\s+){0,3}двер(?:ь|и|ей|ью)?|полотн[оа]|проем|проём)(?:[^\\p{L}\\p{N}]|$)`, 'giu');
+    const count = [...t.matchAll(re)].length;
+    total += count * value;
+  }
+  // Клиенты часто пишут: "одна дверь одинарная и одна распашная".
+  // Вторая часть без слова "дверь", но для заявки это отдельная позиция.
+  for (const [word, value] of wordNumbers) {
+    const re = new RegExp(`(?:^|[^\\p{L}\\p{N}])${word}\\s+(?:одинарн\\p{L}*|распашн\\p{L}*|двустворчат\\p{L}*|двойная|двойную)(?:[^\\p{L}\\p{N}]|$)`, 'giu');
+    const count = [...t.matchAll(re)].length;
+    total += count * value;
+  }
+
+  if (total > 0) return total;
+
+  const range = t.match(/(?:^|[^\p{L}\p{N}])(\d{1,2})\s*[-–]\s*(\d{1,2})\s*(?:шт|штук|штуки?|двери?|полотна?)(?:[^\p{L}\p{N}]|$)/iu);
+  if (range) return Number(range[2]);
+
+  return null;
 }
 
 function extractDataByRules(text) {
@@ -112,181 +197,152 @@ function extractDataByRules(text) {
   const original = String(text || '').trim();
   const result = {};
   const hasAny = (items) => items.some((item) => t.includes(item));
+
+  // --- Имя ---
   const clientName = extractNameByRules(original);
   if (clientName) {
     result.name = clientName;
     result.nameSource = 'dialog';
   }
 
-  const boughtMarkers = [
-    '\u043a\u0443\u043f\u0438\u043b',
-    '\u043a\u0443\u043f\u0438\u043b\u0430',
-    '\u043a\u0443\u043f\u0438\u043b\u0438',
-    '\u043a\u0443\u043f\u043b\u0435\u043d',
-    '\u043a\u0443\u043f\u043b\u0435\u043d\u043e',
-    '\u0432\u0441\u0435 \u043a\u0443\u043f\u043b\u0435\u043d\u043e',
-    '\u0432\u0441\u0451 \u043a\u0443\u043f\u043b\u0435\u043d\u043e',
-    '\u0443\u0436\u0435 \u0435\u0441\u0442\u044c \u0434\u0432\u0435\u0440',
-    '\u0434\u0432\u0435\u0440\u044c \u0435\u0441\u0442\u044c',
-    '\u0434\u0432\u0435\u0440\u0438 \u0435\u0441\u0442\u044c',
-  ];
-  const selectionMarkers = [
-    '\u043f\u043e\u0434\u043e\u0431\u0440',
-    '\u0432\u044b\u0431\u0440',
-    '\u043a\u0430\u0442\u0430\u043b\u043e\u0433',
-    '\u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438',
-    '\u0445\u043e\u0447\u0443 \u043a\u0443\u043f\u0438\u0442\u044c',
-  ];
-  const installMarkers = [
-    '\u0443\u0441\u0442\u0430\u043d\u043e\u0432',
-    '\u043c\u043e\u043d\u0442\u0430\u0436',
-    '\u0441\u043c\u043e\u043d\u0442\u0438\u0440',
-    '\u043f\u043e\u0441\u0442\u0430\u0432\u0438\u0442\u044c',
-  ];
-  const entranceMarkers = [
-    '\u0432\u0445\u043e\u0434\u043d',
-    '\u043c\u0435\u0442\u0430\u043b\u043b',
-    '\u0442\u0435\u0440\u043c\u043e\u0440\u0430\u0437\u0440\u044b\u0432',
-    '\u0442\u0435\u0440\u043c\u043e \u0440\u0430\u0437\u0440\u044b\u0432',
-    '\u0443\u043b\u0438\u0447\u043d',
-  ];
-  const interiorMarkers = [
-    '\u043c\u0435\u0436\u043a\u043e\u043c\u043d\u0430\u0442',
-    '\u0432 \u0441\u043f\u0430\u043b\u044c\u043d',
-    '\u0432 \u0441\u0430\u043d\u0443\u0437',
-    '\u0434\u043e\u0431\u043e\u0440',
-    '\u043f\u043e\u043b\u043e\u0442\u043d',
-  ];
+  // --- Маркеры ---
+  const boughtMarkers = ['купил', 'купила', 'купили', 'куплен', 'куплено',
+    'все куплено', 'всё куплено', 'уже есть двер', 'дверь есть', 'двери есть'];
+  const selectionMarkers = ['подобр', 'выбр', 'каталог', 'в наличии', 'хочу купить'];
+  const installMarkers = ['установ', 'монтаж', 'смонтир', 'поставить'];
+  const entranceMarkers = ['входн', 'металл', 'терморазрыв', 'термо разрыв', 'уличн'];
+  const interiorMarkers = ['межкомнат', 'в спальн', 'в сануз', 'добор', 'полотн'];
+  const serviceOnlyMarkers = ['только установ', 'только монтаж', 'без подбора',
+    'двери уже есть', 'дверь уже есть', 'двери куплены', 'установить двер',
+    'вставить двер', 'поставить двер'];
+
+  // --- Доп. работы ---
   const workItems = [];
   const addWork = (label) => {
     if (!workItems.includes(label)) workItems.push(label);
   };
+  if (hasAny(['демонтаж', 'снять стар', 'убрать стар'])) addWork('демонтаж старой двери');
+  if (hasAny(['откос'])) addWork('откосы');
+  if (hasAny(['добор'])) addWork('доборы');
+  if (hasAny(['наличник'])) addWork('наличники');
+  if (hasAny(['фурнитур', 'ручк', 'замок', 'защел', 'петл'])) addWork('фурнитура/замки/петли');
+  if (hasAny(['доставк', 'привез'])) addWork('доставка');
+  if (workItems.length > 0) result.additionalWork = workItems.join(', ');
 
-  if (hasAny(['\u0434\u0435\u043c\u043e\u043d\u0442\u0430\u0436', '\u0441\u043d\u044f\u0442\u044c \u0441\u0442\u0430\u0440', '\u0443\u0431\u0440\u0430\u0442\u044c \u0441\u0442\u0430\u0440'])) {
-    addWork('\u0434\u0435\u043c\u043e\u043d\u0442\u0430\u0436 \u0441\u0442\u0430\u0440\u043e\u0439 \u0434\u0432\u0435\u0440\u0438');
-  }
-  if (hasAny(['\u043e\u0442\u043a\u043e\u0441'])) addWork('\u043e\u0442\u043a\u043e\u0441\u044b');
-  if (hasAny(['\u0434\u043e\u0431\u043e\u0440'])) addWork('\u0434\u043e\u0431\u043e\u0440\u044b');
-  if (hasAny(['\u043d\u0430\u043b\u0438\u0447\u043d\u0438\u043a'])) addWork('\u043d\u0430\u043b\u0438\u0447\u043d\u0438\u043a\u0438');
-  if (hasAny(['\u0444\u0443\u0440\u043d\u0438\u0442\u0443\u0440', '\u0440\u0443\u0447\u043a', '\u0437\u0430\u043c\u043e\u043a', '\u0437\u0430\u0449\u0435\u043b', '\u043f\u0435\u0442\u043b'])) {
-    addWork('\u0444\u0443\u0440\u043d\u0438\u0442\u0443\u0440\u0430/\u0437\u0430\u043c\u043a\u0438/\u043f\u0435\u0442\u043b\u0438');
-  }
-  if (hasAny(['\u0434\u043e\u0441\u0442\u0430\u0432\u043a', '\u043f\u0440\u0438\u0432\u0435\u0437'])) addWork('\u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0430');
-
-  if (hasAny(['\u043f\u0440\u043e\u0435\u043c\u044b \u0433\u043e\u0442\u043e\u0432\u044b', '\u043f\u0440\u043e\u0435\u043c \u0433\u043e\u0442\u043e\u0432', '\u043f\u0440\u043e\u0451\u043c\u044b \u0433\u043e\u0442\u043e\u0432\u044b', '\u043f\u0440\u043e\u0451\u043c \u0433\u043e\u0442\u043e\u0432'])) {
+  // --- Проёмы ---
+  if (hasAny(['проемы готовы', 'проем готов', 'проёмы готовы', 'проём готов'])) {
     result.readyProems = true;
-  } else if (hasAny(['\u043f\u0440\u043e\u0435\u043c\u044b \u043d\u0435 \u0433\u043e\u0442\u043e\u0432\u044b', '\u043f\u0440\u043e\u0435\u043c \u043d\u0435 \u0433\u043e\u0442\u043e\u0432', '\u043f\u0440\u043e\u0451\u043c\u044b \u043d\u0435 \u0433\u043e\u0442\u043e\u0432\u044b', '\u043f\u0440\u043e\u0451\u043c \u043d\u0435 \u0433\u043e\u0442\u043e\u0432', '\u0434\u043e\u0440\u0430\u0431\u043e\u0442\u0430\u0442\u044c \u043f\u0440\u043e\u0435\u043c', '\u0434\u043e\u0440\u0430\u0431\u043e\u0442\u0430\u0442\u044c \u043f\u0440\u043e\u0451\u043c'])) {
+  } else if (hasAny(['проемы не готовы', 'проем не готов', 'проёмы не готовы',
+    'проём не готов', 'доработать проем', 'доработать проём'])) {
     result.readyProems = false;
   }
 
-  if (workItems.length > 0) result.additionalWork = workItems.join(', ');
-
-  const digits = original.replace(/\D/g, '');
-  if (digits.length >= 10) {
-    const phone = validatePhone(original);
-    if (phone && !phone.startsWith('INVALID:')) result.phone = phone;
+  // --- Телефон (ищем по префиксу +7/8, а не по общему количеству цифр) ---
+  const phonePatterns = [
+    /(\+7[\s\-]?\d{3}[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2})/,
+    /(8[\s\-]?\d{3}[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2})/,
+    /(7[\s\-]?\d{3}[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2})/,
+    /(^|[^\d])(9\d{2}[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2})(?=$|[^\d])/,
+  ];
+  for (const pat of phonePatterns) {
+    const match = original.match(pat);
+    if (match) {
+      const rawPhone = match[2] || match[1];
+      const phoneDigits = rawPhone.replace(/\D/g, '');
+      if (phoneDigits.length >= 10) {
+        const phone = validatePhone(rawPhone);
+        if (phone && !phone.startsWith('INVALID:')) {
+          result.phone = phone;
+          break;
+        }
+      }
+    }
   }
 
+  // --- Мессенджер ---
   if (/\btelegram\b|\bтелеграм\b|\bтг\b/i.test(t)) result.messenger = 'telegram';
   if (/\bmax\b|\bмакс\b/i.test(t)) result.messenger = 'max';
 
-  if (/^[а-яё .,-]{3,}\s+\d+[а-яё0-9/-]*$/i.test(original) && digits.length < 7) {
-    result.address = original;
+  // --- Адрес (улучшено) ---
+  // Паттерны с явными указателями (ул., пр., пер., р-н, г., мкр)
+  const addressPatterns = [
+    /(?:ул(?:ица)?\.?\s*[\p{L}\d\s.-]+?\d+[\p{L}\d/\-]*)/iu,
+    /(?:пр(?:оспект)?\.?\s*[\p{L}\d\s.-]+?\d+[\p{L}\d/\-]*)/iu,
+    /(?:пер(?:еулок)?\.?\s*[\p{L}\d\s.-]+?\d+[\p{L}\d/\-]*)/iu,
+    /(?:^|[\s,.;])(?:р-н|район)\s*[\p{L}\s.-]+/iu,
+    /(?:^|[\s,.;])(?:г\.|город)\s*[\p{L}\s.-]+/iu,
+    /(?:^|[\s,.;])(?:мкр(?:н)?\.?\s*[\p{L}\d\s.-]+)/iu,
+  ];
+  for (const pat of addressPatterns) {
+    const match = original.match(pat);
+    if (match) {
+      result.address = match[0].replace(/^[\s,.;]+/, '').trim();
+      break;
+    }
+  }
+  // Фоллбэк: улица без префикса — "НазваниеУлицы номер" (буквы + пробел + цифры)
+  // Примеры: "копылова 12", "карамзина 10", "ленина 5 к1"
+  if (!result.address) {
+    const bareStreet = original.match(
+      /(?:^|[\s\n])([\p{L}]{3,}(?:[\s.-][\p{L}]{2,})?)\s+(\d+[\p{L}\d/\-]*)/iu
+    );
+    if (bareStreet) {
+      result.address = (bareStreet[1] + ' ' + bareStreet[2]).trim();
+    }
   }
 
-  if (hasAny(boughtMarkers)) result.doorStatus = '\u043a\u0443\u043f\u043b\u0435\u043d\u044b';
-  else if (hasAny(selectionMarkers)) result.doorStatus = '\u043d\u0443\u0436\u043d\u043e \u043f\u043e\u0434\u043e\u0431\u0440\u0430\u0442\u044c';
+  // --- Количество ---
+  const quantity = extractQuantityByRules(original);
+  if (quantity) result.quantity = quantity;
 
+  // --- Статус двери ---
+  if (hasAny(boughtMarkers)) result.doorStatus = 'куплены';
+  else if (hasAny(selectionMarkers)) result.doorStatus = 'нужно подобрать';
+
+  // --- Установка ---
   if (hasAny(installMarkers)) result.needsInstall = true;
 
+  // --- Сервис-only (только установка/работы, без подбора дверей) ---
+  const priceIntent = /сколько|стоим|стоить|цен|рассчит|расч[её]т|прайс/iu.test(t);
+  const selectionIntent = hasAny(selectionMarkers);
+  const buyingDoorIntent = /нужн[аыо]?\s+двер|хочу\s+двер|интересует\s+двер/iu.test(t) && !hasAny(boughtMarkers);
+  const installOnlyIntent = hasAny(installMarkers) && !selectionIntent && !buyingDoorIntent;
+  if (hasAny(serviceOnlyMarkers) || installOnlyIntent || (priceIntent && installOnlyIntent)) {
+    result.serviceOnly = true;
+  }
+
+  // --- Тип двери ---
   const entrance = hasAny(entranceMarkers);
   const interior = hasAny(interiorMarkers);
-  if (entrance && interior) result.doorType = '\u043e\u0431\u0435';
-  else if (entrance) result.doorType = '\u0432\u0445\u043e\u0434\u043d\u0430\u044f';
-  else if (interior) result.doorType = '\u043c\u0435\u0436\u043a\u043e\u043c\u043d\u0430\u0442\u043d\u0430\u044f';
+  if (entrance && interior) result.doorType = 'обе';
+  else if (entrance) result.doorType = 'входная';
+  else if (interior) result.doorType = 'межкомнатная';
 
   return result;
 }
 
-async function extractData(lastUserMessage, currentData) {
-  const ruleBased = extractDataByRules(lastUserMessage);
-  const userPrompt = `Извлеки данные из сообщения клиента. Верни ТОЛЬКО валидный JSON без markdown:
-{
-  "name": "имя клиента, только если клиент явно написал его в этом сообщении, иначе null",
-  "phone": "номер телефона как написал клиент или null",
-  "messenger": "telegram | max | null",
-  "address": "адрес или район или null",
-  "doorStatus": "куплены | нужно подобрать | null",
-  "doorType": "входная | межкомнатная | обе | null",
-  "quantity": число или null,
-  "needsInstall": true/false/null,
-  "readyProems": true/false/null,
-  "additionalWork": "описание доп. работ или null",
-  "notes": "прочие важные детали или null"
-}
-Сообщение: "${lastUserMessage}"
-Уже известно: ${JSON.stringify(currentData)}`;
+// ============================================================
+// EXTRACT DATA — теперь ТОЛЬКО rule-based, без AI
+// ============================================================
 
-  try {
-    const response = await axios.post(API_URL, {
-      model: MODEL,
-      max_tokens: 300,
-      temperature: 0,
-      system: 'Ты — парсер данных. Возвращай ТОЛЬКО валидный JSON без пояснений и без markdown-обёртки.',
-      messages: [{ role: 'user', content: userPrompt }],
-    }, { headers: getHeaders() });
+// currentData — оставлен для обратной совместимости, не используется (AI-парсинг удалён)
+function extractData(lastUserMessage, _currentData) {
+  const data = extractDataByRules(lastUserMessage);
 
-    let raw = response.data.content[0].text.trim();
-    raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-    const parsed = JSON.parse(raw);
-
-    const result = {};
-    for (const [key, value] of Object.entries(parsed)) {
-      if (value !== null && value !== undefined) {
-        result[key] = value;
-      }
+  // Валидация телефона
+  if (data.phone) {
+    const validated = validatePhone(data.phone);
+    if (validated && validated.startsWith('INVALID:')) {
+      data.phoneRaw = data.phone;
+      data.phoneInvalid = true;
+      delete data.phone;
+    } else if (validated) {
+      data.phone = validated;
+      data.phoneInvalid = false;
     }
-    Object.assign(result, ruleBased);
-
-    if (result.name) {
-      const name = cleanClientName(result.name);
-      if (name) {
-        result.name = name;
-        result.nameSource = 'dialog';
-      } else {
-        delete result.name;
-        delete result.nameSource;
-      }
-    }
-
-    if (result.quantity !== undefined && result.quantity !== null) {
-      const q = Number(result.quantity);
-      if (!Number.isFinite(q) || q <= 0 || !hasExplicitQuantityInText(lastUserMessage, q)) {
-        delete result.quantity;
-      } else {
-        result.quantity = q;
-      }
-    }
-
-    // Валидируем телефон
-    if (result.phone) {
-      const validated = validatePhone(result.phone);
-      if (validated && validated.startsWith('INVALID:')) {
-        // Сохраняем сырой номер для отображения в промпте, но не как валидный phone
-        result.phoneRaw = result.phone;   // что написал клиент
-        result.phoneInvalid = true;       // флаг — попросить перепроверить
-        delete result.phone;              // не сохраняем как валидный
-      } else if (validated) {
-        result.phone = validated;
-        result.phoneInvalid = false;
-      }
-    }
-
-    return result;
-  } catch (err) {
-    logger.warn(`extractData failed: ${err.message}`);
-    return ruleBased;
   }
+
+  return data;
 }
 
 module.exports = { generateReply, extractData, extractDataByRules };

@@ -10,8 +10,8 @@ function createSession(chatId) {
     chatId,
     messages: [],
     collectedData: {
-      name: null,
-      nameSource: null,
+      name: null,            // имя клиента из профиля Avito или диалога
+      nameSource: null,      // 'profile' | 'dialog' | null
       phone: null,           // валидный номер телефона
       phoneRaw: null,        // что написал клиент (если невалидный)
       phoneInvalid: false,   // true = попросить перепроверить
